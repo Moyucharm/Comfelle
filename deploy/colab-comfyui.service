@@ -1,0 +1,16 @@
+[Unit]
+Description=Colab ComfyUI Authenticated Reverse Proxy & Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/colab-comfyui
+ExecStart=/opt/colab-comfyui/colab-comfyui serve -config /opt/colab-comfyui/config.yaml
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>控制台 · ComfyUI</title>
+  <style>
+    :root {
+      --bg: #09090b;
+      --surface: #111113;
+      --surface-2: #18181b;
+      --border: #27272a;
+      --border-strong: #3f3f46;
+      --text: #fafafa;
+      --text-2: #a1a1aa;
+      --muted: #71717a;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      font-size: 13px;
+    }
+    .topbar {
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .topbar-inner {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0 20px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+    }
+    .mark {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      background: var(--text);
+    }
+    .sep { color: #3f3f46; }
+    .state-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-2);
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #52525b;
+    }
+    .st-RUNNING .dot { background: var(--green); }
+    .st-RUNNING { color: var(--text); }
+    .st-STARTING .dot, .st-DEPLOYING .dot, .st-STOPPING .dot { background: #a1a1aa; animation: pulse 1.2s ease-in-out infinite; }
+    .st-WAITING_DRIVE_AUTH .dot { background: var(--amber); }
+    .st-WAITING_DRIVE_AUTH { color: #fcd34d; }
+    .st-ERROR .dot { background: var(--red); }
+    .st-ERROR { color: #fca5a5; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .kv { display: flex; flex-direction: column; gap: 3px; }
+    .kv-k { font-size: 11px; color: var(--muted); }
+    .kv-v {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button, .btn {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+
+    .dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .dd-trigger {
+      min-width: 96px;
+      justify-content: space-between;
+      padding: 0 10px 0 12px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .dd-trigger:hover, .dropdown.open .dd-trigger {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+    }
+    .dd-chevron {
+      width: 14px;
+      height: 14px;
+      color: var(--muted);
+      transition: transform 0.15s ease;
+      flex-shrink: 0;
+    }
+    .dropdown.open .dd-chevron { transform: rotate(180deg); color: var(--text-2); }
+    .dd-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      min-width: 148px;
+      padding: 4px;
+      border-radius: 8px;
+      background: #141417;
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+      z-index: 60;
+      opacity: 0;
+      transform: translateY(-4px);
+      pointer-events: none;
+      transition: opacity 0.12s ease, transform 0.12s ease;
+    }
+    .dropdown.open .dd-menu {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .dd-item {
+      width: 100%;
+      height: 30px;
+      padding: 0 9px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--text-2);
+      font-size: 12px;
+      font-weight: 500;
+      justify-content: space-between;
+    }
+    .dd-item:hover {
+      background: #222226;
+      color: var(--text);
+    }
+    .dd-item.active {
+      background: #1e1e22;
+      color: var(--text);
+    }
+    .dd-check {
+      width: 13px;
+      height: 13px;
+      opacity: 0;
+      color: var(--text);
+    }
+    .dd-item.active .dd-check { opacity: 1; }
+
+    .toggle-btn {
+      background: var(--surface);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+      padding: 0 11px;
+      font-size: 12px;
+      gap: 7px;
+    }
+    .toggle-btn:hover { background: var(--surface-2); color: var(--text); }
+    .toggle-btn[aria-pressed="true"] {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+    .toggle-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #3f3f46;
+      transition: background 0.12s ease;
+    }
+    .toggle-btn[aria-pressed="true"] .toggle-dot {
+      background: var(--text);
+    }
+
+    .btn-primary {
+      background: var(--text);
+      color: var(--bg);
+      border: 1px solid var(--text);
+    }
+    .btn-primary:hover { opacity: 0.88; }
+
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: var(--surface-2); border-color: var(--border-strong); }
+
+    .btn-link-muted {
+      background: transparent;
+      color: var(--text-2);
+      border: 1px solid transparent;
+      padding: 0 8px;
+      height: 30px;
+      font-size: 12px;
+    }
+    .btn-link-muted:hover { color: var(--text); }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.08);
+      color: #fca5a5;
+      border: 1px solid rgba(239, 68, 68, 0.28);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.16);
+      border-color: rgba(239, 68, 68, 0.45);
+    }
+    button:disabled { opacity: 0.45; cursor: default; }
+
+    .notice {
+      display: none;
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      border: 1px solid;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .notice.show { display: flex; }
+    .notice-warn {
+      background: rgba(245, 158, 11, 0.07);
+      border-color: rgba(245, 158, 11, 0.3);
+      color: #fde68a;
+    }
+    .notice-err {
+      background: rgba(239, 68, 68, 0.07);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+    .notice-title { font-weight: 500; font-size: 13px; }
+    .notice-sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+
+    .terminal {
+      margin-top: 20px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .terminal-head {
+      height: 36px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+    .terminal-body {
+      height: 420px;
+      overflow-y: auto;
+      padding: 12px 14px;
+      font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #d4d4d8;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .terminal-body::-webkit-scrollbar { width: 6px; }
+    .terminal-body::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    .log-line { display: block; }
+    .log-ts { color: #52525b; margin-right: 8px; user-select: none; }
+    .log-err { color: #fca5a5; }
+    .log-ok { color: #86efac; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="mark"></span>
+        <span>ComfyUI</span>
+        <span class="sep">/</span>
+        <span class="state-pill" id="state-pill"><span class="dot"></span><span id="state-text">连接中</span></span>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" id="top-open-btn" href="/" style="display:none;height:30px;font-size:12px;">打开 ComfyUI</a>
+        <button class="btn-link-muted" id="logout-btn" type="button">退出</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="main">
+    <section class="toolbar">
+      <div class="meta">
+        <div class="kv">
+          <span class="kv-k">算力</span>
+          <span class="kv-v" id="stat-gpu">-</span>
+        </div>
+        <div class="kv">
+          <span class="kv-k">CCU 余额</span>
+          <span class="kv-v" id="stat-ccu">-</span>
+        </div>
+        <div class="kv">
+          <span class="kv-k">心跳</span>
+          <span class="kv-v" id="stat-hb">-</span>
+        </div>
+        <div class="kv">
+          <span class="kv-k">Drive</span>
+          <span class="kv-v" id="stat-drive">-</span>
+        </div>
+      </div>
+
+      <div class="actions" id="controls-stopped" style="display:none;">
+        <div class="dropdown" id="gpu-dropdown">
+          <button class="dd-trigger" id="gpu-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span id="gpu-label">L4</span>
+            <svg class="dd-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>
+          </button>
+          <div class="dd-menu" id="gpu-menu" role="listbox">
+            <button class="dd-item active" type="button" data-value="L4"><span>L4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item" type="button" data-value="T4"><span>T4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item" type="button" data-value="A100"><span>A100</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item" type="button" data-value="H100"><span>H100</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item" type="button" data-value="G4"><span>G4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item" type="button" data-value="CPU"><span>CPU</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+          </div>
+        </div>
+        <button class="toggle-btn" id="high-mem-btn" type="button" aria-pressed="false">
+          <span class="toggle-dot"></span><span>High-RAM</span>
+        </button>
+        <button class="btn-danger" id="release-orphan-btn" type="button" style="display:none;">释放残留实例</button>
+        <button class="btn-primary" id="start-btn" type="button">启动实例</button>
+      </div>
+
+      <div class="actions" id="controls-running" style="display:none;">
+        <a class="btn btn-primary" href="/">打开 ComfyUI</a>
+        <button class="btn-ghost" id="restart-comfy-btn" type="button">重启</button>
+        <button class="btn-ghost" id="sync-btn" type="button">同步插件</button>
+        <button class="btn-danger" id="stop-btn" type="button">关闭实例</button>
+      </div>
+
+      <div class="actions" id="controls-busy" style="display:none;">
+        <button class="btn-danger" id="force-stop-btn" type="button">取消 / 强制关机</button>
+      </div>
+    </section>
+
+    <div class="notice notice-warn" id="drive-banner">
+      <div>
+        <div class="notice-title">需要授权 Google Drive</div>
+        <div class="notice-sub">在新窗口完成授权后，点击右侧按钮继续。</div>
+      </div>
+      <div class="actions">
+        <a class="btn btn-ghost" id="drive-auth-link" href="#" target="_blank" rel="noopener noreferrer">打开授权页</a>
+        <button class="btn-primary" id="drive-confirm-btn" type="button">我已授权，继续</button>
+      </div>
+    </div>
+
+    <div class="notice notice-err" id="err-banner">
+      <div>
+        <div class="notice-title">运行异常</div>
+        <div class="notice-sub" id="err-text"></div>
+      </div>
+    </div>
+
+    <section class="terminal">
+      <div class="terminal-head">
+        <span>日志</span>
+        <button class="btn-link-muted" id="clear-log-btn" type="button">清空</button>
+      </div>
+      <div class="terminal-body" id="log-box"></div>
+    </section>
+  </main>
+
+  <script>
+    const stateLabels = {
+      STOPPED: "已停止",
+      STARTING: "启动中",
+      WAITING_DRIVE_AUTH: "待 Drive 授权",
+      DEPLOYING: "部署中",
+      RUNNING: "运行中",
+      STOPPING: "正在关闭",
+      ERROR: "异常"
+    };
+
+    const $ = (id) => document.getElementById(id);
+    let initializedGPU = false;
+    let selectedGPU = "L4";
+    let highMemEnabled = false;
+
+    const gpuDropdown = $("gpu-dropdown");
+    const gpuTrigger = $("gpu-trigger");
+    const highMemBtn = $("high-mem-btn");
+
+    function setGPU(val) {
+      selectedGPU = val;
+      $("gpu-label").textContent = val;
+      gpuDropdown.querySelectorAll(".dd-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.value === val);
+      });
+    }
+
+    function setHighMem(enabled) {
+      highMemEnabled = !!enabled;
+      highMemBtn.setAttribute("aria-pressed", highMemEnabled ? "true" : "false");
+    }
+
+    gpuTrigger.onclick = (e) => {
+      e.stopPropagation();
+      const open = gpuDropdown.classList.toggle("open");
+      gpuTrigger.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    gpuDropdown.querySelectorAll(".dd-item").forEach((el) => {
+      el.onclick = () => {
+        setGPU(el.dataset.value);
+        gpuDropdown.classList.remove("open");
+        gpuTrigger.setAttribute("aria-expanded", "false");
+      };
+    });
+    document.addEventListener("click", (e) => {
+      if (!gpuDropdown.contains(e.target)) {
+        gpuDropdown.classList.remove("open");
+        gpuTrigger.setAttribute("aria-expanded", "false");
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        gpuDropdown.classList.remove("open");
+        gpuTrigger.setAttribute("aria-expanded", "false");
+      }
+    });
+    highMemBtn.onclick = () => setHighMem(!highMemEnabled);
+
+    async function apiPost(path, body = {}) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "fetch"
+        },
+        body: JSON.stringify(body)
+      });
+      if (res.status === 401) {
+        window.location.href = "/panel/login";
+        return null;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || ("HTTP " + res.status));
+        return null;
+      }
+      return data;
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "-";
+      return new Date(iso).toLocaleTimeString("zh-CN", { hour12: false });
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/panel/api/status", { cache: "no-store" });
+        if (res.status === 401) {
+          window.location.href = "/panel/login";
+          return;
+        }
+        const s = await res.json();
+
+        $("state-pill").className = "state-pill st-" + s.state;
+        $("state-text").textContent = stateLabels[s.state] || s.state;
+
+        if (!initializedGPU && s.default_gpu) {
+          setGPU(s.default_gpu);
+          setHighMem(!!s.high_mem);
+          initializedGPU = true;
+        }
+
+        $("stat-gpu").textContent = s.state === "STOPPED" ? s.default_gpu : s.gpu;
+        if (typeof s.ccu_balance === "number") {
+          const rate = typeof s.ccu_rate_hourly === "number" && s.ccu_rate_hourly > 0
+            ? ` · ${s.ccu_rate_hourly.toFixed(2)}/h`
+            : "";
+          $("stat-ccu").textContent = s.ccu_balance.toFixed(2) + rate;
+        } else {
+          $("stat-ccu").textContent = "-";
+        }
+        if (s.state === "RUNNING") {
+          $("stat-hb").textContent = fmtTime(s.last_heartbeat_at) + (s.tunnel_healthy ? "" : " (探活中)");
+        } else {
+          $("stat-hb").textContent = `${s.keepalive_interval_sec}s`;
+        }
+        $("stat-drive").textContent = s.drive_notebook_set ? "已绑定笔记本" : "按次授权";
+
+        $("top-open-btn").style.display = s.state === "RUNNING" ? "inline-flex" : "none";
+        const isIdleOrErr = (s.state === "STOPPED" || s.state === "ERROR");
+        $("controls-stopped").style.display = isIdleOrErr ? "flex" : "none";
+        $("release-orphan-btn").style.display = (isIdleOrErr && s.has_active_vm) ? "inline-flex" : "none";
+        $("controls-running").style.display = s.state === "RUNNING" ? "flex" : "none";
+        $("controls-busy").style.display = ["STARTING", "WAITING_DRIVE_AUTH", "DEPLOYING", "STOPPING"].includes(s.state) ? "flex" : "none";
+
+        const driveBanner = $("drive-banner");
+        if (s.state === "WAITING_DRIVE_AUTH" && s.drive_auth_url) {
+          $("drive-auth-link").href = s.drive_auth_url;
+          driveBanner.classList.add("show");
+        } else {
+          driveBanner.classList.remove("show");
+        }
+
+        const errBanner = $("err-banner");
+        if (s.error_message) {
+          $("err-text").textContent = s.error_message;
+          errBanner.classList.add("show");
+        } else {
+          errBanner.classList.remove("show");
+        }
+      } catch (_) {}
+    }
+
+    function appendLogLine(line) {
+      const box = $("log-box");
+      const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 50;
+      const el = document.createElement("span");
+      el.className = "log-line";
+      const m = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/);
+      if (m) {
+        const ts = document.createElement("span");
+        ts.className = "log-ts";
+        ts.textContent = m[1];
+        const msg = document.createElement("span");
+        msg.textContent = m[2];
+        if (m[2].includes("[ERROR]") || m[2].includes("失败")) msg.className = "log-err";
+        else if (m[2].includes("[READY]") || m[2].includes("成功")) msg.className = "log-ok";
+        el.append(ts, msg);
+      } else {
+        el.textContent = line;
+      }
+      box.appendChild(el);
+      if (nearBottom) box.scrollTop = box.scrollHeight;
+    }
+
+    $("start-btn").onclick = async () => {
+      await apiPost("/panel/api/start", {
+        gpu: selectedGPU,
+        high_mem: highMemEnabled
+      });
+      refreshStatus();
+    };
+    $("stop-btn").onclick = async () => {
+      if (!confirm("同步插件并关闭当前实例？")) return;
+      await apiPost("/panel/api/stop", { force: false });
+      refreshStatus();
+    };
+    $("force-stop-btn").onclick = async () => {
+      if (!confirm("跳过同步并立即释放实例？")) return;
+      await apiPost("/panel/api/stop", { force: true });
+      refreshStatus();
+    };
+    $("release-orphan-btn").onclick = async () => {
+      if (!confirm("立即释放云端残留实例以停止计费？")) return;
+      await apiPost("/panel/api/stop", { force: true });
+      refreshStatus();
+    };
+    $("drive-confirm-btn").onclick = async () => {
+      await apiPost("/panel/api/drive-confirm");
+      refreshStatus();
+    };
+    $("restart-comfy-btn").onclick = async () => {
+      if (!confirm("重启 ComfyUI 进程？")) return;
+      await apiPost("/panel/api/restart-comfy");
+    };
+    $("sync-btn").onclick = async () => {
+      await apiPost("/panel/api/sync-plugins");
+    };
+    $("logout-btn").onclick = async () => {
+      await apiPost("/panel/logout");
+      window.location.href = "/panel/login";
+    };
+    $("clear-log-btn").onclick = () => {
+      $("log-box").textContent = "";
+    };
+
+    const es = new EventSource("/panel/api/logs");
+    es.onmessage = (ev) => {
+      try { appendLogLine(JSON.parse(ev.data)); } catch (_) {}
+    };
+
+    refreshStatus();
+    setInterval(refreshStatus, 3000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Binaries
+/colab-comfyui
+/bin/
+*.exe
+
+# Local runtime secrets & state (NEVER commit!)
+config.yaml
+google_token.json
+state.json
+*.key
+*.pem
+.env
+.creds
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc

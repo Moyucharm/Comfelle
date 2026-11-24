@@ -1,0 +1,6 @@
+# 前置 Caddy HTTPS 反代示例（自动申请并续期 HTTPS 证书）
+comfy.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        flush_interval -1
+    }
+}

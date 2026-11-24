@@ -1,0 +1,45 @@
+# colab-comfyui 服务配置示例
+# 复制为 config.yaml 后填写，切勿提交到公开仓库
+
+server:
+  # 监听地址（前置 Nginx/Caddy 反代时建议仅监听本机回环）
+  listen: "127.0.0.1:8080"
+  # 是否信任上游反代传来的 X-Forwarded-Proto / X-Forwarded-For
+  trust_proxy: true
+  # 强制 Cookie 携带 Secure（若前置已启用 HTTPS 建议保持 true）
+  cookie_secure: true
+  # 是否在 ComfyUI 页面右上角注入极简状态/关机悬浮胶囊
+  enable_floating_dock: true
+
+auth:
+  # 外层控制面板登录账号
+  username: "admin"
+  # 密码 bcrypt 哈希：运行 `./colab-comfyui hash-password` 生成
+  password_hash: ""
+  # Session 签名密钥（留空时自动生成并持久化到 state_file）
+  session_secret: ""
+  # 登录有效期（小时）
+  session_ttl_hours: 168
+
+colab:
+  # Google OAuth2 Token 文件路径（权限建议 0600）
+  # 可通过 scripts/export_local_token.py 从本机导出，或运行 `./colab-comfyui auth-google` 获取
+  token_file: "./google_token.json"
+  # 本地状态文件（保存固定 notebook_hash、会话元数据、自动生成的 session_secret）
+  state_file: "./state.json"
+  # 默认 GPU 规格：T4 / L4 / A100 / H100 / G4 / CPU
+  default_gpu: "L4"
+  # 是否请求高内存实例（L4 单一规格会自动忽略）
+  high_mem: false
+  # 【免重复 Drive 授权关键配置】
+  # 你自己 Google Drive 里一个私有（不共享）空白 .ipynb 笔记本的真实 File ID
+  # 例如链接 https://colab.research.google.com/drive/1AbCdEfGhIjKlMnOpQrStUvWxYz 中的 1AbCd...
+  # 留空则回退为每次新建实例时通过 /panel 弹窗授权
+  drive_notebook_file_id: ""
+  # Google 账号索引，默认 0
+  auth_user: "0"
+  # 保活心跳间隔（秒），默认 480（8 分钟）
+  keepalive_interval_sec: 480
+  # 可选：模型下载器使用的 Token（仅在运行部署时注入 Colab 内存，不写入 Drive）
+  hf_token: ""
+  civitai_token: ""
