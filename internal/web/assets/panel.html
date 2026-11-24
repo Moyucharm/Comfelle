@@ -864,6 +864,9 @@
         el.textContent = line;
       }
       box.appendChild(el);
+      while (box.childNodes.length > 300) {
+        box.removeChild(box.firstChild);
+      }
       if (nearBottom) box.scrollTop = box.scrollHeight;
     }
 
@@ -909,6 +912,9 @@
     };
 
     const es = new EventSource("/panel/api/logs");
+    es.onopen = () => {
+      $("log-box").textContent = "";
+    };
     es.onmessage = (ev) => {
       try { appendLogLine(JSON.parse(ev.data)); } catch (_) {}
     };

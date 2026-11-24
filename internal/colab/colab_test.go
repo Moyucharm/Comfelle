@@ -2,9 +2,9 @@ package colab
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +147,6 @@ func TestRuntimeExecuteWithColabDriveHook(t *testing.T) {
 	if !strings.Contains(res.Stdout, "Mounted at /content/drive") {
 		t.Fatalf("unexpected stdout: %q", res.Stdout)
 	}
-	_ = json.Valid([]byte("{}"))
 }
 
 func TestAPIErrorSummarizesHTMLBody(t *testing.T) {
@@ -179,7 +178,7 @@ func TestAPIErrorSummarizesHTMLBody(t *testing.T) {
 
 func TestBuildRcloneMountCodeEscapesConfigAndRemote(t *testing.T) {
 	code := BuildRcloneMountCode("[gdrive]\ntype = drive\ntoken = {\"access_token\":\"abc\"}\n", "gdrive:Colab/ComfyUI/")
-	for _, want := range []string{"fuse3", `"--vfs-cache-mode", "full"`, `"--vfs-read-chunk-streams", "8"`, `"--dir-cache-time", "1h"`, `"--timeout", "60s"`} {
+	for _, want := range []string{"fuse3", `"--vfs-cache-mode", "full"`, `"--vfs-cache-max-size", "15G"`, `"--vfs-read-chunk-streams", "8"`, `"--dir-cache-time", "1h"`, `"--timeout", "60s"`, "need_rclone_apt"} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("expected %s in rclone mount script", want)
 		}
@@ -247,7 +246,7 @@ func TestRuntimeExecuteRetriesTransientWSDialFailure(t *testing.T) {
 }
 
 func TestBuildDeployCodeExcludesGitAndThrottlesRcloneMigration(t *testing.T) {
-	code := BuildDeployCode("pw123", "", "")
+	code := BuildDeployCode("pw123", "hf_tok", "civ_tok")
 	for _, want := range []string{
 		`"--exclude=.git"`,
 		`'--exclude', '.git/**'`,
@@ -256,6 +255,9 @@ func TestBuildDeployCodeExcludesGitAndThrottlesRcloneMigration(t *testing.T) {
 		`'--drive-pacer-min-sleep', '100ms'`,
 		`gzip on;`,
 		`application/json`,
+		`/tmp/.custom_nodes.manifest`,
+		`/content/start_comfy.py`,
+		`/content/.comfy_env.json`,
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("expected deploy.py to contain %s", want)
@@ -263,5 +265,23 @@ func TestBuildDeployCodeExcludesGitAndThrottlesRcloneMigration(t *testing.T) {
 	}
 	if strings.Contains(code, `'--transfers', '32'`) {
 		t.Fatalf("deploy.py must not use 32 concurrent rclone transfers against Google Drive")
+	}
+
+	if py, err := exec.LookPath("python3"); err == nil {
+		for name, src := range map[string]string{
+			"deploy":       code,
+			"rclone_mount": BuildRcloneMountCode("[gdrive]\ntype=drive\n", "gdrive:Colab/ComfyUI"),
+			"sync_force":   BuildSyncPluginsCode(true),
+			"sync_auto":    BuildSyncPluginsCode(false),
+			"rotate_auth":  BuildRotateAuthAndGetURLCode("pw123"),
+			"restart":      RestartComfyCode,
+			"tunnel":       RestartTunnelCode,
+		} {
+			cmd := exec.Command(py, "-c", "import ast, sys; ast.parse(sys.stdin.read())")
+			cmd.Stdin = strings.NewReader(src)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("embedded python %q has syntax error: %v\n%s", name, err, string(out))
+			}
+		}
 	}
 }

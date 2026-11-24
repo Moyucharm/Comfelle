@@ -40,7 +40,6 @@ const (
 
 var (
 	tunnelURLRe  = regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
-	redactURLRe  = regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
 	stageEventRe = regexp.MustCompile(`^\[STAGE\s+(\d{1,3})\]\s+(.+)$`)
 )
 
@@ -107,6 +106,7 @@ type Manager struct {
 	opSeq              uint64
 	opCancel           context.CancelFunc
 	keepaliveCancel    context.CancelFunc
+	execMu             sync.Mutex
 
 	usageMu     sync.Mutex
 	cachedCCU   *colab.CCUInfo
@@ -300,12 +300,7 @@ func (m *Manager) RestartComfy() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
 		m.appendLog("[COMFY] 正在重启 ComfyUI 进程（保留 VM 与隧道）...")
-		rt, err := m.runtimeClient(ctx)
-		if err != nil {
-			m.appendLog("[COMFY] 获取运行时失败: " + err.Error())
-			return
-		}
-		_, err = rt.Execute(ctx, colab.RestartComfyCode, colab.ExecuteOptions{
+		_, err := m.execInRuntime(ctx, colab.RestartComfyCode, colab.ExecuteOptions{
 			IdleTimeout: 3 * time.Minute,
 			OnOutput:    m.appendStreamOutput,
 		})
@@ -331,12 +326,7 @@ func (m *Manager) SyncPluginsNow() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		m.appendLog("[SYNC] 开始手动同步 custom_nodes 到持久化存储...")
-		rt, err := m.runtimeClient(ctx)
-		if err != nil {
-			m.appendLog("[SYNC] 失败: " + err.Error())
-			return
-		}
-		_, err = rt.Execute(ctx, colab.SyncPluginsCode, colab.ExecuteOptions{
+		_, err := m.execInRuntime(ctx, colab.BuildSyncPluginsCode(true), colab.ExecuteOptions{
 			IdleTimeout: 90 * time.Second,
 			OnOutput:    m.appendStreamOutput,
 		})
@@ -443,7 +433,7 @@ func (m *Manager) appendStreamOutput(chunk string) {
 		if line == "" {
 			continue
 		}
-		safe := redactURLRe.ReplaceAllString(line, "https://<hidden-tunnel>.trycloudflare.com")
+		safe := tunnelURLRe.ReplaceAllString(line, "https://<hidden-tunnel>.trycloudflare.com")
 		if sm := stageEventRe.FindStringSubmatch(safe); len(sm) == 3 {
 			pct, _ := strconv.Atoi(sm[1])
 			m.setProgress(pct, sm[2], sm[2])

@@ -23,6 +23,14 @@ func (m *Manager) isCurrentOp(opID uint64) bool {
 
 // Reconcile 在服务启动时执行一次对账：仅认领本系统记录过 Endpoint 的存活会话，绝不触碰非本系统创建的实例。
 func (m *Manager) Reconcile(ctx context.Context) {
+	m.mu.RLock()
+	startSeq := m.opSeq
+	idle := m.state == StateStopped
+	m.mu.RUnlock()
+	if !idle {
+		return
+	}
+
 	persisted := m.store.Snapshot()
 	if persisted.Endpoint == "" {
 		m.appendLog("[INIT] 本系统当前无托管中的历史实例。")
@@ -44,6 +52,12 @@ func (m *Manager) Reconcile(ctx context.Context) {
 		}
 	}
 	if picked == nil {
+		m.mu.Lock()
+		unchanged := m.opSeq == startSeq && m.state == StateStopped
+		m.mu.Unlock()
+		if !unchanged {
+			return
+		}
 		m.appendLog("[INIT] 本系统上次记录的实例已释放，状态已重置（未触碰账号下其他实例）。")
 		m.clearPersistedRuntime()
 		return
@@ -67,8 +81,11 @@ func (m *Manager) Reconcile(ctx context.Context) {
 
 	rawURL := extractTunnelURL(res.Stdout)
 	if rawURL == "" {
-		m.appendLog("[INIT] 发现活跃 VM 但 ComfyUI 尚未启动，请在面板点击「接管并继续」复用该实例。")
 		m.mu.Lock()
+		if m.opSeq != startSeq || m.state != StateStopped {
+			m.mu.Unlock()
+			return
+		}
 		m.endpoint = picked.Endpoint
 		m.gpu = normalizeAccel(picked.Accelerator)
 		m.proxyURL = picked.RuntimeProxyInfo.URL
@@ -77,6 +94,7 @@ func (m *Manager) Reconcile(ctx context.Context) {
 		m.kernelID = rt.KernelID
 		m.sessionID = rt.SessionID
 		m.mu.Unlock()
+		m.appendLog("[INIT] 发现活跃 VM 但 ComfyUI 尚未启动，请在面板点击「接管并继续」复用该实例。")
 		return
 	}
 
@@ -86,12 +104,17 @@ func (m *Manager) Reconcile(ctx context.Context) {
 		return
 	}
 
+	healthy := m.probeTunnel(ctx, parsed, pw)
 	now := time.Now()
 	started := now
 	if persisted.StartedAt != nil && !persisted.StartedAt.IsZero() {
 		started = *persisted.StartedAt
 	}
 	m.mu.Lock()
+	if m.opSeq != startSeq || m.state != StateStopped {
+		m.mu.Unlock()
+		return
+	}
 	m.state = StateRunning
 	m.gpu = normalizeAccel(picked.Accelerator)
 	m.endpoint = picked.Endpoint
@@ -104,7 +127,7 @@ func (m *Manager) Reconcile(ctx context.Context) {
 	m.comfyPassword = pw
 	m.startedAt = &started
 	m.lastHeartbeatAt = &now
-	m.tunnelHealthy = m.probeTunnel(ctx, parsed, pw)
+	m.tunnelHealthy = healthy
 	m.errorMessage = ""
 	m.clearProgressLocked()
 	m.mu.Unlock()
@@ -238,15 +261,42 @@ func (m *Manager) runStartFlow(ctx context.Context, opID uint64, gpu string, hig
 		if err != nil {
 			nbh = uuid.New()
 		}
-		assigned, err = m.api.Assign(ctx, nbh, gpu, highMem)
+		// 使用独立超时完成单次 Assign，确保若云端已创建实例一定能拿到 Endpoint 完成原子交接或兜底释放。
+		assignCtx, assignCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		assigned, err = m.api.Assign(assignCtx, nbh, gpu, highMem)
+		assignCancel()
 		if err != nil {
 			fail("分配 Colab 实例失败", err)
 			return
 		}
-		m.appendLog(fmt.Sprintf("[1/4] 新实例已就绪: %s (%s)", assigned.Endpoint, normalizeAccel(assigned.Accelerator)))
+		if m.isCurrentOp(opID) && ctx.Err() == nil {
+			m.appendLog(fmt.Sprintf("[1/4] 新实例已就绪: %s (%s)", assigned.Endpoint, normalizeAccel(assigned.Accelerator)))
+		}
+	}
+
+	allocAt := time.Now()
+	m.mu.Lock()
+	if m.opSeq != opID || ctx.Err() != nil {
+		// 分配途中用户已点击关机（当时 Stop 未能读到该新 Endpoint）或网关退出：立即释放新分配的实例，杜绝孤儿 VM 扣费。
+		shouldRelease := assigned.Endpoint != persisted.Endpoint
+		m.mu.Unlock()
+		if shouldRelease {
+			m.appendLog(fmt.Sprintf("[CLEANUP] 启动已取消，正在自动释放刚分配的 Colab 实例 %s 停止计费...", assigned.Endpoint))
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_, _ = m.unassignVerified(cleanCtx, assigned.Endpoint)
+			cleanCancel()
+			m.invalidateCCUCache()
+		}
+		return
 	}
 	allocatedEndpoint = assigned.Endpoint
-	allocAt := time.Now()
+	m.endpoint = assigned.Endpoint
+	m.gpu = normalizeAccel(assigned.Accelerator)
+	m.proxyURL = assigned.RuntimeProxyInfo.URL
+	m.proxyToken = assigned.RuntimeProxyInfo.Token
+	m.proxyTokenExp = allocAt.Add(time.Duration(assigned.RuntimeProxyInfo.TokenExpiresInSeconds) * time.Second)
+	m.mu.Unlock()
+
 	var instanceStarted time.Time
 	_ = m.store.Update(func(st *PersistedState) {
 		if st.Endpoint != assigned.Endpoint || st.StartedAt == nil || st.StartedAt.IsZero() {
@@ -258,12 +308,9 @@ func (m *Manager) runStartFlow(ctx context.Context, opID uint64, gpu string, hig
 	})
 
 	m.mu.Lock()
-	m.endpoint = assigned.Endpoint
-	m.gpu = normalizeAccel(assigned.Accelerator)
-	m.proxyURL = assigned.RuntimeProxyInfo.URL
-	m.proxyToken = assigned.RuntimeProxyInfo.Token
-	m.proxyTokenExp = time.Now().Add(time.Duration(assigned.RuntimeProxyInfo.TokenExpiresInSeconds) * time.Second)
-	m.startedAt = &instanceStarted
+	if m.opSeq == opID {
+		m.startedAt = &instanceStarted
+	}
 	m.mu.Unlock()
 
 	m.setProgress(18, "连接远端 Jupyter 内核", assigned.Endpoint)
@@ -510,7 +557,7 @@ func (m *Manager) runStopFlow(ctx context.Context, cancel context.CancelFunc, op
 		m.appendLog("[STOP] 停机前正在同步 custom_nodes 插件到持久化存储...")
 		syncCtx, syncCancel := context.WithTimeout(ctx, 90*time.Second)
 		rt := colab.NewRuntimeClient(pURL, pTok, kID, sID)
-		if _, err := rt.Execute(syncCtx, colab.SyncPluginsCode, colab.ExecuteOptions{
+		if _, err := rt.Execute(syncCtx, colab.BuildSyncPluginsCode(false), colab.ExecuteOptions{
 			IdleTimeout: 80 * time.Second,
 			OnOutput:    m.appendStreamOutput,
 		}); err != nil {

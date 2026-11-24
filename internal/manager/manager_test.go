@@ -21,19 +21,30 @@ type fakeColabAPI struct {
 	assignedEP   string
 	unassignedEP []string
 	unassignCh   chan string
+	assignFn     func(ctx context.Context, notebookHash uuid.UUID, gpu string, highMem bool) (*colab.Assignment, error)
+	listFn       func(ctx context.Context) ([]colab.Assignment, error)
 	unassignFn   func(ctx context.Context, endpoint string) error
 }
 
 func (f *fakeColabAPI) ListAssignments(ctx context.Context) ([]colab.Assignment, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]colab.Assignment(nil), f.listed...), nil
+	fn := f.listFn
+	cp := append([]colab.Assignment(nil), f.listed...)
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return cp, nil
 }
 
 func (f *fakeColabAPI) Assign(ctx context.Context, notebookHash uuid.UUID, gpu string, highMem bool) (*colab.Assignment, error) {
 	f.mu.Lock()
+	fn := f.assignFn
 	f.assignedEP = "gpu-l4-test-ep"
 	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, notebookHash, gpu, highMem)
+	}
 	// 故意返回一个无法连通的本地地址，触发 EnsureKernel 失败，验证是否会自动 Unassign。
 	return &colab.Assignment{
 		Accelerator: "L4",
@@ -435,4 +446,123 @@ func TestStructuredStageProgressAndRcloneStatus(t *testing.T) {
 	if !strings.Contains(snap.ProgressDetail, "rclone copyto") {
 		t.Fatalf("unexpected ProgressDetail: %q", snap.ProgressDetail)
 	}
+}
+
+func TestCancelDuringAssignAutoUnassignsOrphanVM(t *testing.T) {
+	cfg := config.Default()
+	cfg.Colab.StateFile = filepath.Join(t.TempDir(), "state.json")
+	store, err := OpenStateStore(cfg.Colab.StateFile)
+	if err != nil {
+		t.Fatalf("OpenStateStore failed: %v", err)
+	}
+
+	assignEntered := make(chan struct{})
+	releaseAssign := make(chan struct{})
+	const orphanEP = "gpu-h100-inflight-ep"
+
+	api := &fakeColabAPI{
+		unassignCh: make(chan string, 2),
+		assignFn: func(ctx context.Context, notebookHash uuid.UUID, gpu string, highMem bool) (*colab.Assignment, error) {
+			close(assignEntered)
+			<-releaseAssign
+			return &colab.Assignment{
+				Accelerator: "H100",
+				Endpoint:    orphanEP,
+				RuntimeProxyInfo: colab.RuntimeProxyInfo{
+					URL:                   "http://127.0.0.1:1",
+					Token:                 "tok",
+					TokenExpiresInSeconds: 3600,
+				},
+			}, nil
+		},
+	}
+
+	mgr := New(cfg, api, store)
+	defer mgr.Shutdown()
+
+	if err := mgr.Start("H100", false); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	<-assignEntered
+
+	// 在 Assign 尚未返回、本地尚无 Endpoint 时点击强制关机
+	if err := mgr.Stop(true); err != nil {
+		t.Fatalf("Stop(true) during Assign failed: %v", err)
+	}
+	close(releaseAssign)
+
+	select {
+	case ep := <-api.unassignCh:
+		if ep != orphanEP {
+			t.Fatalf("expected orphan VM %q to be unassigned, got %q", orphanEP, ep)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for cancelled in-flight Assign to auto-unassign orphan VM")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if snap := mgr.Status(context.Background()); snap.State == StateStopped && !snap.HasActiveVM {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	snap := mgr.Status(context.Background())
+	t.Fatalf("expected final STOPPED with HasActiveVM=false, got state=%s hasActive=%v", snap.State, snap.HasActiveVM)
+}
+
+func TestReconcileYieldsToConcurrentUserStop(t *testing.T) {
+	cfg := config.Default()
+	cfg.Colab.StateFile = filepath.Join(t.TempDir(), "state.json")
+	store, err := OpenStateStore(cfg.Colab.StateFile)
+	if err != nil {
+		t.Fatalf("OpenStateStore failed: %v", err)
+	}
+	const staleEP = "gpu-l4-reconcile-race"
+	_ = store.Update(func(st *PersistedState) {
+		st.Endpoint = staleEP
+	})
+
+	listEntered := make(chan struct{})
+	releaseList := make(chan struct{})
+	var once sync.Once
+
+	api := &fakeColabAPI{
+		unassignCh: make(chan string, 2),
+		listFn: func(ctx context.Context) ([]colab.Assignment, error) {
+			once.Do(func() {
+				close(listEntered)
+				<-releaseList
+			})
+			return nil, nil
+		},
+	}
+
+	mgr := New(cfg, api, store)
+	defer mgr.Shutdown()
+
+	reconcileDone := make(chan struct{})
+	go func() {
+		defer close(reconcileDone)
+		mgr.Reconcile(context.Background())
+	}()
+
+	<-listEntered
+	// 对账卡在远端请求期间，用户在面板发起了强制关机与重新启动
+	if err := mgr.Stop(true); err != nil {
+		t.Fatalf("Stop(true) failed: %v", err)
+	}
+	close(releaseList)
+	<-reconcileDone
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := mgr.Status(context.Background())
+		if snap.State == StateStopped && !snap.HasActiveVM {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	snap := mgr.Status(context.Background())
+	t.Fatalf("expected StateStopped with HasActiveVM=false, got state=%s hasActive=%v", snap.State, snap.HasActiveVM)
 }

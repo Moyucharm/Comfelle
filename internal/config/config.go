@@ -45,9 +45,13 @@ type ColabConfig struct {
 
 // Default 返回带安全默认值的配置。
 func Default() *Config {
+	defaultListen := "127.0.0.1:8080"
+	if v := strings.TrimSpace(os.Getenv("COMFY_DEFAULT_LISTEN")); v != "" {
+		defaultListen = v
+	}
 	return &Config{
 		Server: ServerConfig{
-			Listen:             "127.0.0.1:8080",
+			Listen:             defaultListen,
 			TrustProxy:         true,
 			CookieSecure:       true,
 			EnableFloatingDock: true,
@@ -146,10 +150,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// NormalizeGPU 规范化 GPU 名称；未知值回落为 L4。
+// NormalizeGPU 规范化 GPU 名称；留空或未知值回落为 L4，显式指定 CPU/NONE 时使用 CPU。
 func NormalizeGPU(raw string) string {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
-	case "CPU", "NONE", "":
+	case "CPU", "NONE":
 		return "CPU"
 	case "T4", "L4", "G4", "A100", "H100":
 		return strings.ToUpper(strings.TrimSpace(raw))

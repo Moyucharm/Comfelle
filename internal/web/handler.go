@@ -33,7 +33,7 @@ func New(a *auth.Authenticator, m *manager.Manager) *Handler {
 	h.mux.HandleFunc("POST /panel/login", h.handleLoginSubmit)
 	h.mux.HandleFunc("POST /panel/logout", h.handleLogout)
 	h.mux.HandleFunc("GET /panel", h.handlePanelPage)
-	h.mux.HandleFunc("GET /panel/", h.handlePanelPage)
+	h.mux.HandleFunc("GET /panel/{$}", h.handlePanelPage)
 	h.mux.HandleFunc("GET /panel/dock.js", h.handleDockJS)
 
 	h.mux.HandleFunc("GET /panel/api/status", h.handleStatus)
@@ -66,19 +66,9 @@ func (h *Handler) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-
-	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求格式无效"})
-			return
-		}
-	} else {
-		if err := r.ParseForm(); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "表单解析失败"})
-			return
-		}
-		req.Username = r.FormValue("username")
-		req.Password = r.FormValue("password")
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求格式无效"})
+		return
 	}
 
 	ok, retryAfter := h.auth.Authenticate(r, strings.TrimSpace(req.Username), req.Password)
@@ -111,10 +101,6 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePanelPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/panel" && r.URL.Path != "/panel/" {
-		http.NotFound(w, r)
-		return
-	}
 	data, _ := assetsFS.ReadFile("assets/panel.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

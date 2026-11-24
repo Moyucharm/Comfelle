@@ -19,12 +19,8 @@ func BuildDeployCode(comfyPassword, hfToken, civitaiToken string) string {
 		fmt.Fprintf(&b, "os.environ[%q] = %s\n", k, string(valJSON))
 	}
 	writeEnv("COMFY_PASSWORD", comfyPassword)
-	if hfToken != "" {
-		writeEnv("HF_TOKEN", hfToken)
-	}
-	if civitaiToken != "" {
-		writeEnv("CIVITAI_TOKEN", civitaiToken)
-	}
+	writeEnv("HF_TOKEN", hfToken)
+	writeEnv("CIVITAI_TOKEN", civitaiToken)
 	b.WriteString("\n")
 	b.WriteString(deployScript)
 	return b.String()
@@ -67,6 +63,7 @@ else:
             errs.append(exc)
 
     threads = []
+    need_rclone_apt = False
     if shutil.which("fusermount3") is None:
         def _install_fuse3():
             print("[RCLONE] 安装 fuse3...", flush=True)
@@ -75,14 +72,14 @@ else:
         threads.append(threading.Thread(target=_run_bg, args=(_install_fuse3,)))
     if shutil.which("rclone") is None:
         def _install_rclone():
+            nonlocal need_rclone_apt
             print("[RCLONE] 下载安装最新版 rclone...", flush=True)
             r = subprocess.run(
-                ["bash", "-c", "curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && unzip -qo /tmp/rclone.zip -d /tmp/rclone_unzip && cp /tmp/rclone_unzip/rclone-*/rclone /usr/local/bin/rclone && chmod 755 /usr/local/bin/rclone && rm -rf /tmp/rclone.zip /tmp/rclone_unzip"],
+                ["bash", "-c", "curl -fsSL --retry 2 https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && unzip -qo /tmp/rclone.zip -d /tmp/rclone_unzip && cp /tmp/rclone_unzip/rclone-*/rclone /usr/local/bin/rclone && chmod 755 /usr/local/bin/rclone && rm -rf /tmp/rclone.zip /tmp/rclone_unzip"],
                 capture_output=True, text=True,
             )
             if r.returncode != 0:
-                subprocess.run(["apt-get", "update", "-qq"], check=True)
-                subprocess.run(["apt-get", "install", "-y", "-qq", "rclone"], check=True)
+                need_rclone_apt = True
         threads.append(threading.Thread(target=_run_bg, args=(_install_rclone,)))
 
     for t in threads:
@@ -91,6 +88,9 @@ else:
         t.join()
     if errs:
         raise errs[0]
+    if need_rclone_apt and shutil.which("rclone") is None:
+        subprocess.run(["apt-get", "update", "-qq"], check=True)
+        subprocess.run(["apt-get", "install", "-y", "-qq", "rclone"], check=True)
 
     print(f"[RCLONE] 校验远端目录 {remote}...", flush=True)
     mk = subprocess.run(
@@ -104,28 +104,28 @@ else:
     subprocess.run(["pkill", "-f", "rclone mount"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
 
-    log_f = open(log_path, "ab", buffering=0)
-    proc = subprocess.Popen(
-        [
-            "rclone", "mount", remote, str(mount_dir),
-            "--config", str(conf_path),
-            "--cache-dir", "/content/.rclone_cache",
-            "--vfs-cache-mode", "full",
-            "--vfs-cache-max-size", "40G",
-            "--vfs-write-back", "3s",
-            "--vfs-read-chunk-size", "32M",
-            "--vfs-read-chunk-streams", "8",
-            "--vfs-read-ahead", "512M",
-            "--buffer-size", "128M",
-            "--dir-cache-time", "1h",
-            "--drive-pacer-min-sleep", "100ms",
-            "--contimeout", "15s",
-            "--timeout", "60s",
-            "--low-level-retries", "5",
-            "--retries", "3",
-        ],
-        stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True,
-    )
+    with open(log_path, "ab", buffering=0) as log_f:
+        proc = subprocess.Popen(
+            [
+                "rclone", "mount", remote, str(mount_dir),
+                "--config", str(conf_path),
+                "--cache-dir", "/content/.rclone_cache",
+                "--vfs-cache-mode", "full",
+                "--vfs-cache-max-size", "15G",
+                "--vfs-write-back", "3s",
+                "--vfs-read-chunk-size", "32M",
+                "--vfs-read-chunk-streams", "8",
+                "--vfs-read-ahead", "512M",
+                "--buffer-size", "128M",
+                "--dir-cache-time", "1h",
+                "--drive-pacer-min-sleep", "100ms",
+                "--contimeout", "15s",
+                "--timeout", "60s",
+                "--low-level-retries", "5",
+                "--retries", "3",
+            ],
+            stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True,
+        )
 
     deadline = time.time() + 30
     while time.time() < deadline:
@@ -150,12 +150,17 @@ drive.mount("/content/drive")
 // KeepalivePingCode 轻量保活心跳代码。
 const KeepalivePingCode = `print("ping")`
 
-// SyncPluginsCode 调用 deploy.py 生成的唯一同步脚本 /content/sync_plugins.py。
-const SyncPluginsCode = `import subprocess, sys
+// BuildSyncPluginsCode 生成调用 /content/sync_plugins.py 的代码；force=true 时跳过未变更短路强制上传。
+func BuildSyncPluginsCode(force bool) string {
+	extra := ""
+	if force {
+		extra = `, "--force"`
+	}
+	return fmt.Sprintf(`import subprocess, sys
 from pathlib import Path
 script = Path("/content/sync_plugins.py")
 if script.is_file():
-    r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(script)%s], capture_output=True, text=True)
     if r.stdout:
         print(r.stdout, end="", flush=True)
     if r.stderr:
@@ -164,7 +169,8 @@ if script.is_file():
         raise RuntimeError(f"sync_plugins.py failed (exit {r.returncode}): {(r.stderr or r.stdout)[-1200:]}")
 else:
     print("[SYNC] skipped (sync_plugins.py absent)")
-`
+`, extra)
+}
 
 // BuildRotateAuthAndGetURLCode 用于网关重启后热接管存活会话：
 // 1. 仅在 ComfyUI 已存活时平滑轮换 nginx Basic Auth 密码（零中断）；
@@ -225,23 +231,20 @@ if r.returncode != 0:
     raise RuntimeError(f"start_tunnel.py failed (exit {r.returncode}): {(r.stderr or r.stdout)[-1200:]}")
 `
 
-// RestartComfyCode 仅重启 ComfyUI 进程（保留 VM、存储挂载和隧道，方便装完插件生效）。
-const RestartComfyCode = `import subprocess, sys, time, urllib.request
-from pathlib import Path
-subprocess.run(["pkill", "-f", "ComfyUI/main.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-time.sleep(3)
-log_path = Path("/content/comfyui.log")
-log_f = open(log_path, "ab", buffering=0)
-subprocess.Popen([sys.executable, "/content/ComfyUI/main.py", "--listen", "127.0.0.1", "--port", "8188", "--dont-print-server", "--disable-mmap"], stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True)
-for _ in range(90):
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:8188/system_stats", timeout=3) as r:
-            if r.status == 200:
-                print("[RESTART] ComfyUI UP")
-                break
-    except Exception:
-        pass
-    time.sleep(2)
-else:
-    raise RuntimeError("Timeout waiting for ComfyUI restart")
+// RestartComfyCode 调用统一脚本 /content/start_comfy.py --restart 重启 ComfyUI 进程（保留 VM、存储挂载、环境变量与隧道）。
+const RestartComfyCode = `import subprocess, sys
+proc = subprocess.Popen(
+    [sys.executable, "/content/start_comfy.py", "--restart"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+)
+tail = []
+assert proc.stdout is not None
+for line in proc.stdout:
+    print(line, end="", flush=True)
+    tail.append(line)
+    if len(tail) > 25:
+        del tail[:-25]
+proc.wait()
+if proc.returncode != 0:
+    raise RuntimeError(f"start_comfy.py --restart failed (exit {proc.returncode}): {''.join(tail)[-1200:]}")
 `

@@ -64,8 +64,7 @@ func (m *Manager) runKeepaliveTick(ctx context.Context, consecutiveTunnelFailure
 	tickCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	rt, err := m.runtimeClient(tickCtx)
-	if err != nil {
+	if _, err := m.execInRuntime(tickCtx, colab.KeepalivePingCode, colab.ExecuteOptions{IdleTimeout: 30 * time.Second}); err != nil {
 		if ctx.Err() != nil {
 			return
 		}
@@ -73,14 +72,6 @@ func (m *Manager) runKeepaliveTick(ctx context.Context, consecutiveTunnelFailure
 			if m.finishStoppedIfRunning(ctx) {
 				m.appendLog("[KEEPALIVE] 检测到 Colab 云端实例已被回收或停止，已更新为 STOPPED。")
 			}
-			return
-		}
-		m.appendLog("[KEEPALIVE] 刷新运行时令牌失败: " + err.Error())
-		return
-	}
-
-	if _, err := rt.Execute(tickCtx, colab.KeepalivePingCode, colab.ExecuteOptions{IdleTimeout: 30 * time.Second}); err != nil {
-		if ctx.Err() != nil {
 			return
 		}
 		m.appendLog("[KEEPALIVE] 心跳执行异常: " + err.Error())
@@ -115,7 +106,7 @@ func (m *Manager) runKeepaliveTick(ctx context.Context, consecutiveTunnelFailure
 
 	*consecutiveTunnelFailures++
 	m.appendLog(fmt.Sprintf("[KEEPALIVE] 心跳成功，但隧道探活失败（连续第 %d 次），尝试自动重建 cloudflared...", *consecutiveTunnelFailures))
-	res, err := rt.Execute(tickCtx, colab.RestartTunnelCode, colab.ExecuteOptions{IdleTimeout: 75 * time.Second})
+	res, err := m.execInRuntime(tickCtx, colab.RestartTunnelCode, colab.ExecuteOptions{IdleTimeout: 75 * time.Second})
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -123,18 +114,68 @@ func (m *Manager) runKeepaliveTick(ctx context.Context, consecutiveTunnelFailure
 		m.appendLog("[KEEPALIVE] 自动重建隧道失败: " + err.Error())
 		return
 	}
-	if newRaw := extractTunnelURL(res.Stdout); newRaw != "" {
-		if parsed, err := url.Parse(newRaw); err == nil {
-			m.mu.Lock()
-			if ctx.Err() == nil && m.state == StateRunning {
-				m.tunnelURL = parsed
-				m.tunnelHealthy = true
-			}
-			m.mu.Unlock()
-			*consecutiveTunnelFailures = 0
-			m.appendLog("[KEEPALIVE] 隧道自愈成功，已无缝热切换上游地址。")
+	newRaw := extractTunnelURL(res.Stdout)
+	parsed, parseErr := url.Parse(newRaw)
+	if newRaw == "" || parseErr != nil {
+		m.appendLog("[KEEPALIVE] 重建隧道未返回有效的 Cloudflare 地址。")
+		return
+	}
+
+	tunnelOK := false
+	for i := 0; i < 3; i++ {
+		if m.probeTunnel(tickCtx, parsed, curPW) {
+			tunnelOK = true
+			break
+		}
+		select {
+		case <-tickCtx.Done():
+			return
+		case <-time.After(2 * time.Second):
 		}
 	}
+
+	m.mu.Lock()
+	if ctx.Err() == nil && m.state == StateRunning {
+		m.tunnelURL = parsed
+		m.tunnelHealthy = tunnelOK
+	}
+	m.mu.Unlock()
+
+	if tunnelOK {
+		*consecutiveTunnelFailures = 0
+		m.appendLog("[KEEPALIVE] 隧道自愈成功，已验证连通并无缝热切换上游地址。")
+	} else {
+		m.appendLog("[KEEPALIVE] 隧道进程已重建，但探活暂未返回 200，将在下一周期继续检查。")
+	}
+}
+
+func (m *Manager) execInRuntime(ctx context.Context, code string, opts colab.ExecuteOptions) (*colab.ExecuteResult, error) {
+	m.execMu.Lock()
+	defer m.execMu.Unlock()
+
+	rt, err := m.runtimeClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	prevKernel := rt.KernelID
+	res, execErr := rt.Execute(ctx, code, opts)
+	if rt.KernelID != "" && rt.KernelID != prevKernel {
+		newKID := rt.KernelID
+		m.mu.Lock()
+		ep := m.endpoint
+		if ep != "" {
+			m.kernelID = newKID
+		}
+		m.mu.Unlock()
+		if ep != "" {
+			_ = m.store.Update(func(st *PersistedState) {
+				if st.Endpoint == ep {
+					st.KernelID = newKID
+				}
+			})
+		}
+	}
+	return res, execErr
 }
 
 func (m *Manager) runtimeClient(ctx context.Context) (*colab.RuntimeClient, error) {
