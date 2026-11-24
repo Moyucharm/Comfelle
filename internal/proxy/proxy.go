@@ -38,14 +38,12 @@ type TargetProvider interface {
 type Handler struct {
 	provider           TargetProvider
 	enableFloatingDock bool
-	transport          *http.Transport
+	httpTransport      *http.Transport
+	wsTransport        *http.Transport
 }
 
-// New 创建动态反向代理处理器。
-func New(provider TargetProvider, enableFloatingDock bool) *Handler {
-	// 关键：Cloudflare Quick Tunnel 默认支持 H2，但 WebSocket Upgrade 必须走 HTTP/1.1。
-	// 禁用上游 HTTP/2 协商（TLSNextProto 置空映射），确保普通 HTTP 流式传输与 WebSocket 双向升级均稳定生效。
-	transport := &http.Transport{
+func newUpstreamTransport(enableHTTP2 bool) *http.Transport {
+	t := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -54,27 +52,39 @@ func New(provider TargetProvider, enableFloatingDock bool) *Handler {
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
-		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-		ForceAttemptHTTP2:     false,
-		MaxIdleConns:          100,
+		ForceAttemptHTTP2:     enableHTTP2,
+		MaxIdleConns:          128,
+		MaxIdleConnsPerHost:   64,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 0, // 允许 ComfyUI 长耗时生图请求不提前超时
 	}
+	if !enableHTTP2 {
+		// WebSocket Upgrade 必须走 HTTP/1.1，显式置空 TLSNextProto 禁用 ALPN h2 协商。
+		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
+	}
+	return t
+}
 
+// New 创建动态反向代理处理器。
+func New(provider TargetProvider, enableFloatingDock bool) *Handler {
+	// 普通 HTTP 请求启用 HTTP/2 多路复用，避免首页数十个 JS/CSS/API 请求重复做 TLS 握手；
+	// 仅 WebSocket Upgrade 请求使用独立 HTTP/1.1 Transport，兼顾兼容性与首屏加载速度。
 	return &Handler{
 		provider:           provider,
 		enableFloatingDock: enableFloatingDock,
-		transport:          transport,
+		httpTransport:      newUpstreamTransport(true),
+		wsTransport:        newUpstreamTransport(false),
 	}
 }
 
 // ServeHTTP 实现 http.Handler：未就绪时引导至 /panel，就绪后 100% 透明流式反代 ComfyUI。
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	isWS := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 	target := h.provider.ProxyTarget()
 	if !target.Ready || target.URL == nil {
-		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || strings.HasPrefix(r.URL.Path, "/api/") {
+		if isWS || strings.HasPrefix(r.URL.Path, "/api/") {
 			http.Error(w, "Colab instance is not running", http.StatusServiceUnavailable)
 			return
 		}
@@ -85,13 +95,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	shouldInjectDock := h.enableFloatingDock &&
 		r.Method == http.MethodGet &&
 		(r.URL.Path == "/" || r.URL.Path == "/index.html") &&
-		!strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		!isWS
 
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(target.Username+":"+target.Password))
 	upstreamOrigin := target.URL.Scheme + "://" + target.URL.Host
+	transport := h.httpTransport
+	if isWS {
+		transport = h.wsTransport
+	}
 
 	rp := &httputil.ReverseProxy{
-		Transport:     h.transport,
+		Transport:     transport,
 		FlushInterval: -1, // 立即刷新，保证流式与事件推送无延迟
 		ErrorLog:      log.New(io.Discard, "", 0),
 		Rewrite: func(pr *httputil.ProxyRequest) {

@@ -14,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -23,7 +24,7 @@ PERSIST_ROOT = Path('/content/drive/MyDrive/Colab/ComfyUI')
 LOCAL_COMFY_PATH = Path('/content/ComfyUI')
 COMFY_REPO_URL = 'https://github.com/comfyanonymous/ComfyUI.git'
 COMFY_REPO_BRANCH = 'master'
-PERSIST_APP_PATH = PERSIST_ROOT / 'app'
+PERSIST_NODES_DIR = PERSIST_ROOT / 'custom_nodes'
 MANAGER_REPO_URL = 'https://github.com/ltdrdata/ComfyUI-Manager.git'
 COMFY_PORT = 8188
 PROXY_PORT = 8787
@@ -244,12 +245,242 @@ def run(argv, **kwargs):
     return subprocess.run(argv, check=True, **kwargs)
 
 
+def emit_stage(pct, title):
+    print(f'[STAGE {pct}] {title}', flush=True)
+
+
+def run_with_heartbeat(label, argv, *, env=None, cwd=None, interval=8):
+    start = time.monotonic()
+    print(f'{label}...', flush=True)
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+        cwd=cwd,
+    )
+    tail = []
+    done = threading.Event()
+
+    def _reader():
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = raw.strip()
+                if line:
+                    tail.append(line)
+                    if len(tail) > 25:
+                        del tail[:-25]
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    while proc.poll() is None:
+        if done.wait(interval):
+            break
+        if proc.poll() is None:
+            elapsed = int(time.monotonic() - start)
+            hint = f' | {tail[-1][:80]}' if tail else ''
+            print(f'{label} 进行中，已耗时 {elapsed}s{hint}', flush=True)
+
+    proc.wait()
+    t.join(timeout=2)
+    elapsed = int(time.monotonic() - start)
+    if proc.returncode != 0:
+        msg = '\n'.join('  ' + l for l in tail[-20:])
+        raise RuntimeError(f'{label} 失败 (exit {proc.returncode}, {elapsed}s):\n{msg}')
+    print(f'{label} 完成，耗时 {elapsed}s', flush=True)
+
+
 def comfy_is_up():
     try:
         with urllib.request.urlopen(f'http://127.0.0.1:{COMFY_PORT}/system_stats', timeout=3) as resp:
             return resp.status == 200
     except Exception:
         return False
+
+
+RCLONE_CONF = Path('/content/.rclone.conf')
+RCLONE_REMOTE_FILE = Path('/content/.rclone_remote')
+SYNC_PLUGINS_SCRIPT = Path('/content/sync_plugins.py')
+START_TUNNEL_SCRIPT = Path('/content/start_tunnel.py')
+
+
+def rclone_remote_root():
+    if RCLONE_CONF.is_file() and RCLONE_REMOTE_FILE.is_file() and shutil.which('rclone'):
+        return RCLONE_REMOTE_FILE.read_text(encoding='utf-8').strip().rstrip('/')
+    return ''
+
+
+def storage_is_mounted():
+    return os.path.ismount(PERSIST_ROOT) or os.path.ismount(DRIVE_MOUNT_PATH)
+
+
+def rclone_lsf(rel_path):
+    remote = rclone_remote_root()
+    if not remote:
+        return []
+    target = f'{remote}/{rel_path.lstrip("/")}' if rel_path else remote
+    r = subprocess.run(
+        ['rclone', 'lsf', '--config', str(RCLONE_CONF), '--max-depth', '1', target],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        return []
+    return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+
+def pull_archive(label, archive_name, dst_dir):
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    remote = rclone_remote_root()
+    if remote:
+        if archive_name not in rclone_lsf(''):
+            return False
+        local_tmp = Path('/tmp') / archive_name
+        local_tmp.unlink(missing_ok=True)
+        run_with_heartbeat(
+            f'{label}（rclone 直拉单文件）',
+            ['rclone', 'copyto', '--config', str(RCLONE_CONF), f'{remote}/{archive_name}', str(local_tmp)],
+            interval=8,
+        )
+        size_mb = local_tmp.stat().st_size / (1024 * 1024)
+        run_with_heartbeat(
+            f'{label}（解压 {size_mb:.1f} MB）',
+            ['tar', '-xzf', str(local_tmp), '-C', str(dst_dir)],
+            interval=8,
+        )
+        local_tmp.unlink(missing_ok=True)
+        return True
+
+    src_archive = PERSIST_ROOT / archive_name
+    if not src_archive.is_file() or src_archive.stat().st_size == 0:
+        return False
+    size_mb = src_archive.stat().st_size / (1024 * 1024)
+    run_with_heartbeat(
+        f'{label}（解压 {size_mb:.1f} MB）',
+        ['tar', '-xzf', str(src_archive), '-C', str(dst_dir)],
+        interval=8,
+    )
+    return True
+
+
+def push_archive(label, src_dir, archive_name, excludes):
+    start = time.monotonic()
+    local_tmp = Path('/tmp') / (archive_name + '.tmp')
+    local_tmp.unlink(missing_ok=True)
+    run_with_heartbeat(f'{label}（本地打包）', ['tar', '-czf', str(local_tmp), *excludes, '-C', str(src_dir), '.'], interval=8)
+    size_mb = local_tmp.stat().st_size / (1024 * 1024)
+    remote = rclone_remote_root()
+    if remote:
+        run_with_heartbeat(
+            f'{label}（rclone 同步上传 {size_mb:.1f} MB）',
+            ['rclone', 'copyto', '--config', str(RCLONE_CONF), str(local_tmp), f'{remote}/{archive_name}'],
+            interval=8,
+        )
+    else:
+        dst_archive = PERSIST_ROOT / archive_name
+        dst_archive.parent.mkdir(parents=True, exist_ok=True)
+        remote_tmp = dst_archive.with_name(dst_archive.name + '.tmp')
+        shutil.copyfile(local_tmp, remote_tmp)
+        os.replace(remote_tmp, dst_archive)
+    local_tmp.unlink(missing_ok=True)
+    elapsed = int(time.monotonic() - start)
+    print(f'{label} 已写入持久化存储，大小 {size_mb:.1f} MB，耗时 {elapsed}s', flush=True)
+
+
+def ensure_helper_scripts():
+    SYNC_PLUGINS_SCRIPT.write_text(
+        '''#!/usr/bin/env python3
+import os, shutil, subprocess, sys, time
+from pathlib import Path
+
+src = Path("/content/ComfyUI/custom_nodes")
+dst = Path("/content/drive/MyDrive/Colab/ComfyUI/custom_nodes.tar.gz")
+rclone_conf = Path("/content/.rclone.conf")
+rclone_remote_file = Path("/content/.rclone_remote")
+mounted = os.path.ismount("/content/drive") or os.path.ismount("/content/drive/MyDrive/Colab/ComfyUI")
+if not (mounted and src.is_dir()):
+    print("[SYNC] skipped (storage or custom_nodes absent)", flush=True)
+    sys.exit(0)
+
+start = time.monotonic()
+local_tmp = Path("/tmp/custom_nodes.tar.gz.tmp")
+local_tmp.unlink(missing_ok=True)
+r = subprocess.run([
+    "tar", "-czf", str(local_tmp),
+    "--exclude=./colab_model_downloader",
+    "--exclude=./colab_local_image",
+    "--exclude=.git",
+    "--exclude=__pycache__",
+    "--exclude=*.pyc",
+    "-C", str(src), ".",
+], capture_output=True, text=True)
+if r.returncode != 0:
+    print(f"[SYNC] tar failed (exit {r.returncode}): {(r.stderr or r.stdout)[-500:]}", flush=True)
+    sys.exit(r.returncode)
+
+size_mb = local_tmp.stat().st_size / (1024 * 1024)
+if rclone_conf.is_file() and rclone_remote_file.is_file() and shutil.which("rclone"):
+    remote = rclone_remote_file.read_text(encoding="utf-8").strip().rstrip("/")
+    up = subprocess.run(
+        ["rclone", "copyto", "--config", str(rclone_conf), str(local_tmp), f"{remote}/custom_nodes.tar.gz"],
+        capture_output=True, text=True,
+    )
+    local_tmp.unlink(missing_ok=True)
+    if up.returncode != 0:
+        print(f"[SYNC] rclone copyto failed (exit {up.returncode}): {(up.stderr or up.stdout)[-500:]}", flush=True)
+        sys.exit(up.returncode)
+    print(f"[SYNC] rclone ok ({size_mb:.1f} MB, {int(time.monotonic() - start)}s)", flush=True)
+else:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    remote_tmp = dst.with_name(dst.name + ".tmp")
+    shutil.copyfile(local_tmp, remote_tmp)
+    os.replace(remote_tmp, dst)
+    local_tmp.unlink(missing_ok=True)
+    print(f"[SYNC] ok ({size_mb:.1f} MB, {int(time.monotonic() - start)}s)", flush=True)
+''',
+        encoding='utf-8',
+    )
+    SYNC_PLUGINS_SCRIPT.chmod(0o755)
+
+    START_TUNNEL_SCRIPT.write_text(
+        f'''#!/usr/bin/env python3
+import re, subprocess, sys, time
+from pathlib import Path
+
+subprocess.run(["pkill", "-f", "cloudflared tunnel"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1)
+cf_log = Path("/content/cloudflared.log")
+cf_log.unlink(missing_ok=True)
+log_f = open(cf_log, "ab", buffering=0)
+proc = subprocess.Popen(
+    [{CLOUDFLARED_BIN!r}, "tunnel", "--protocol", "http2", "--url", "http://127.0.0.1:{PROXY_PORT}"],
+    stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True,
+)
+pattern = re.compile(r"https://[a-zA-Z0-9-]+\\.trycloudflare\\.com")
+deadline = time.time() + 90
+while time.time() < deadline:
+    if proc.poll() is not None:
+        out = cf_log.read_text(errors="replace")[-1500:] if cf_log.exists() else ""
+        print(f"[TUNNEL] cloudflared exited early (code {{proc.returncode}}):\\n{{out}}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    if cf_log.exists():
+        m = pattern.search(cf_log.read_text(errors="replace"))
+        if m:
+            url = m.group(0)
+            Path({str(URL_FILE)!r}).write_text(url + "\\n", encoding="utf-8")
+            print(f"[READY_URL] {{url}}", flush=True)
+            sys.exit(0)
+    time.sleep(1)
+print("[TUNNEL] Timeout waiting for Cloudflare Quick Tunnel URL", file=sys.stderr, flush=True)
+sys.exit(1)
+''',
+        encoding='utf-8',
+    )
+    START_TUNNEL_SCRIPT.chmod(0o755)
 
 
 def start_plugin_sync_daemon(interval=PLUGIN_SYNC_INTERVAL_SEC):
@@ -261,16 +492,14 @@ def start_plugin_sync_daemon(interval=PLUGIN_SYNC_INTERVAL_SEC):
     script.write_text(
         '#!/bin/bash\n'
         'while true; do\n'
-        '  rsync -a --delete --exclude colab_model_downloader --exclude colab_local_image \\\n'
-        '        --exclude __pycache__ --exclude "*.pyc" \\\n'
-        '        /content/ComfyUI/custom_nodes/ /content/drive/MyDrive/Colab/ComfyUI/custom_nodes/ \\\n'
-        '        >> /content/plugin_sync.log 2>&1\n'
         f'  sleep {interval}\n'
-        'done\n'
+        f'  {sys.executable} {SYNC_PLUGINS_SCRIPT} >> /content/plugin_sync.log 2>&1\n'
+        'done\n',
+        encoding='utf-8',
     )
     script.chmod(0o755)
     subprocess.Popen(['bash', str(script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    print(f'[SYNC] detached plugin sync daemon started ({interval}s interval)', flush=True)
+    print(f'[SYNC] detached plugin archive sync daemon started ({interval}s interval)', flush=True)
 
 
 def link_workflows():
@@ -293,66 +522,101 @@ def link_workflows():
 
 def install_requirements(req_path, env=None):
     req = str(req_path)
+    req_name = Path(req).parent.name + '/' + Path(req).name
     attempts = [
         ['uv', 'pip', 'install', '--system', '-q', '-r', req],
         ['uv', 'pip', 'install', '--python', sys.executable, '-q', '-r', req],
         [sys.executable, '-m', 'pip', 'install', '-q', '--no-input', '-r', req],
     ]
     for cmd in attempts:
-        print('[DEPS] $ ' + ' '.join(cmd), flush=True)
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env if cmd[0] == 'uv' else None)
-        if proc.returncode == 0:
-            print('[DEPS] ok', flush=True)
+        try:
+            run_with_heartbeat(
+                f'[DEPS] 安装依赖 {req_name} ({cmd[0]})',
+                cmd,
+                env=env if cmd[0] == 'uv' else None,
+                interval=10,
+            )
             return
-        tail = (proc.stderr or proc.stdout or '').strip().splitlines()[-20:]
-        print('[DEPS] failed (exit %d):' % proc.returncode, flush=True)
-        print('\n'.join('  ' + line for line in tail), flush=True)
+        except RuntimeError as exc:
+            print(str(exc), flush=True)
     raise RuntimeError('Dependency install failed for ' + req)
 
 
+def install_requirements_batch(req_paths, env=None):
+    reqs = [str(p) for p in req_paths if Path(p).is_file()]
+    if not reqs:
+        return
+    req_args = []
+    for r in reqs:
+        req_args.extend(['-r', r])
+    label = f'[DEPS] 合并安装 {len(reqs)} 份依赖清单'
+    attempts = [
+        ['uv', 'pip', 'install', '--system', '-q', *req_args],
+        ['uv', 'pip', 'install', '--python', sys.executable, '-q', *req_args],
+    ]
+    for cmd in attempts:
+        try:
+            run_with_heartbeat(f'{label} ({cmd[0]})', cmd, env=env, interval=10)
+            return
+        except RuntimeError as exc:
+            print(f'[DEPS] 合并安装未一次性通过，将逐份安装兜底: {str(exc)[:200]}', flush=True)
+    for r in reqs:
+        install_requirements(r, env=env)
+
+
 def prepare():
-    if not os.path.ismount(DRIVE_MOUNT_PATH):
-        raise RuntimeError('Google Drive 未挂载到 /content/drive')
+    if not storage_is_mounted():
+        raise RuntimeError('持久化存储未挂载到 /content/drive 或 /content/drive/MyDrive/Colab/ComfyUI')
     PERSIST_ROOT.mkdir(parents=True, exist_ok=True)
     missing = [pkg for pkg, bin_name in [
         ('aria2', 'aria2c'), ('rsync', 'rsync'), ('nginx', 'nginx'),
         ('apache2-utils', 'htpasswd'), ('curl', 'curl')
     ] if shutil.which(bin_name) is None]
+
+    errors = []
+
+    def _task(fn):
+        try:
+            fn()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = []
     if missing:
-        run(['apt-get', 'update', '-qq'])
-        run(['apt-get', 'install', '-y', '-qq', *missing])
+        def _apt():
+            run_with_heartbeat('[ENV] 更新软件源', ['apt-get', 'update', '-qq'])
+            run_with_heartbeat(f'[ENV] 安装系统工具 ({", ".join(missing)})', ['apt-get', 'install', '-y', '-qq', *missing])
+        threads.append(threading.Thread(target=_task, args=(_apt,)))
     if shutil.which('uv') is None:
-        run([sys.executable, '-m', 'pip', 'install', '-q', 'uv'])
+        threads.append(threading.Thread(target=_task, args=(
+            lambda: run_with_heartbeat('[ENV] 安装 uv 包管理器', [sys.executable, '-m', 'pip', 'install', '-q', 'uv']),
+        )))
     if not Path(CLOUDFLARED_BIN).exists():
-        run(['curl', '-fsSL', CLOUDFLARED_URL, '-o', CLOUDFLARED_BIN])
-        os.chmod(CLOUDFLARED_BIN, 0o755)
+        def _cf():
+            run_with_heartbeat('[ENV] 下载 cloudflared 隧道客户端', ['curl', '-fsSL', CLOUDFLARED_URL, '-o', CLOUDFLARED_BIN])
+            os.chmod(CLOUDFLARED_BIN, 0o755)
+        threads.append(threading.Thread(target=_task, args=(_cf,)))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise errors[0]
 
 
 def install_comfy():
-    excludes = [
-        '--exclude', '/models/', '--exclude', '/custom_nodes/',
-        '--exclude', '/input/', '--exclude', '/output/',
-        '--exclude', '/temp/', '--exclude', '/user/',
-        '--exclude', '/__pycache__/', '--exclude', '*.pyc',
+    tar_excludes = [
+        '--exclude=./models', '--exclude=./custom_nodes',
+        '--exclude=./input', '--exclude=./output',
+        '--exclude=./temp', '--exclude=./user',
+        '--exclude=./.git', '--exclude=__pycache__', '--exclude=*.pyc',
     ]
-    has_snapshot = (PERSIST_APP_PATH / 'main.py').is_file() and (PERSIST_APP_PATH / 'requirements.txt').is_file()
-    if PERSIST_APP_PATH.exists() and any(PERSIST_APP_PATH.iterdir()) and not has_snapshot:
-        raise RuntimeError(f'Incomplete persisted ComfyUI at {PERSIST_APP_PATH}')
-
-    if has_snapshot:
-        print('[APP] Restoring persistent ComfyUI from Drive...', flush=True)
-        LOCAL_COMFY_PATH.mkdir(parents=True, exist_ok=True)
-        run(['rsync', '-a', *excludes, str(PERSIST_APP_PATH) + '/', str(LOCAL_COMFY_PATH) + '/'])
-    else:
-        if not (LOCAL_COMFY_PATH / 'main.py').exists():
-            print('[APP] First install: cloning ComfyUI...', flush=True)
-            run(['git', 'clone', '--depth', '1', '-b', COMFY_REPO_BRANCH, COMFY_REPO_URL, str(LOCAL_COMFY_PATH)])
-        PERSIST_APP_PATH.mkdir(parents=True, exist_ok=True)
-        run(['rsync', '-a', *excludes, str(LOCAL_COMFY_PATH) + '/', str(PERSIST_APP_PATH) + '/'])
-
-    env = os.environ.copy()
-    env['UV_CACHE_DIR'] = '/content/uv_cache'
-    install_requirements(LOCAL_COMFY_PATH / 'requirements.txt', env=env)
+    if (LOCAL_COMFY_PATH / 'main.py').is_file():
+        print('[APP] 本地 /content/ComfyUI 已就绪，跳过重复解压', flush=True)
+    elif not pull_archive('[APP] 恢复 ComfyUI 快照', 'app.tar.gz', LOCAL_COMFY_PATH):
+        run_with_heartbeat('[APP] 极速拉取 ComfyUI 源码', ['git', 'clone', '--depth', '1', '-b', COMFY_REPO_BRANCH, COMFY_REPO_URL, str(LOCAL_COMFY_PATH)])
+        push_archive('[APP] 上传单文件 ComfyUI 快照', LOCAL_COMFY_PATH, 'app.tar.gz', tar_excludes)
 
     local = LOCAL_COMFY_PATH / 'models'
     remote = PERSIST_ROOT / 'models'
@@ -377,40 +641,83 @@ def install_comfy():
 
     for name in ['input', 'output', 'temp', 'custom_nodes', 'user']:
         (LOCAL_COMFY_PATH / name).mkdir(exist_ok=True)
-    (PERSIST_ROOT / 'custom_nodes').mkdir(exist_ok=True)
     link_workflows()
-    print('[APP] Ready (ephemeral output/input/temp, zero image persistence).', flush=True)
+    print('[APP] Ready (models/workflows symlinked, zero image persistence).', flush=True)
 
 
 def install_nodes():
     local = LOCAL_COMFY_PATH / 'custom_nodes'
-    remote = PERSIST_ROOT / 'custom_nodes'
-    excludes = ['--exclude', '__pycache__', '--exclude', '*.pyc', '--exclude', 'colab_model_downloader', '--exclude', 'colab_local_image']
-    run(['rsync', '-a', *excludes, str(remote) + '/', str(local) + '/'])
+    local.mkdir(parents=True, exist_ok=True)
 
-    # 确保彻底移除任何残留的旧版 WebSocket 收图扩展
+    if not pull_archive('[NODES] 恢复 custom_nodes 快照', 'custom_nodes.tar.gz', local):
+        remote = rclone_remote_root()
+        if remote:
+            if rclone_lsf('custom_nodes'):
+                run_with_heartbeat(
+                    '[NODES] 首次迁移旧 custom_nodes 目录',
+                    [
+                        'rclone', 'copy',
+                        '--config', str(RCLONE_CONF),
+                        '--transfers', '4',
+                        '--checkers', '8',
+                        '--tpslimit', '8',
+                        '--tpslimit-burst', '8',
+                        '--drive-pacer-min-sleep', '100ms',
+                        '--drive-chunk-size', '64M',
+                        '--fast-list',
+                        '--exclude', '.git/**',
+                        '--exclude', '__pycache__/**',
+                        '--exclude', '*.pyc',
+                        '--exclude', 'colab_model_downloader/**',
+                        '--exclude', 'colab_local_image/**',
+                        '--stats', '5s',
+                        '--stats-one-line',
+                        '--stats-log-level', 'NOTICE',
+                        f'{remote}/custom_nodes',
+                        str(local),
+                    ],
+                    interval=6,
+                )
+                run_with_heartbeat('[NODES] 打包并上传 custom_nodes 快照', [sys.executable, str(SYNC_PLUGINS_SCRIPT)], interval=8)
+        elif PERSIST_NODES_DIR.is_dir() and any(PERSIST_NODES_DIR.iterdir()):
+            excludes = ['--exclude', '.git', '--exclude', '__pycache__', '--exclude', '*.pyc', '--exclude', 'colab_model_downloader', '--exclude', 'colab_local_image']
+            run_with_heartbeat('[NODES] 首次从旧目录迁移 custom_nodes', ['rsync', '-a', *excludes, str(PERSIST_NODES_DIR) + '/', str(local) + '/'], interval=8)
+            run_with_heartbeat('[NODES] 打包并上传 custom_nodes 快照', [sys.executable, str(SYNC_PLUGINS_SCRIPT)], interval=8)
+
     stale_local_img = local / 'colab_local_image'
     if stale_local_img.exists():
         shutil.rmtree(stale_local_img, ignore_errors=True)
 
     manager = local / 'ComfyUI-Manager'
     if not manager.exists():
-        run(['git', 'clone', '--depth', '1', MANAGER_REPO_URL, str(manager)])
+        run_with_heartbeat('[NODES] 克隆 ComfyUI-Manager', ['git', 'clone', '--depth', '1', MANAGER_REPO_URL, str(manager)])
 
     downloader = local / 'colab_model_downloader'
     (downloader / 'js').mkdir(parents=True, exist_ok=True)
     (downloader / '__init__.py').write_text(DOWNLOADER_BACKEND_SOURCE)
     (downloader / 'js' / 'downloader.js').write_text(DOWNLOADER_FRONTEND_SOURCE)
 
-    for folder in local.iterdir():
+    emit_stage(76, '安装 Python 依赖')
+    env = os.environ.copy()
+    env['UV_CACHE_DIR'] = '/content/uv_cache'
+    req_list = []
+    if (LOCAL_COMFY_PATH / 'requirements.txt').is_file():
+        req_list.append(LOCAL_COMFY_PATH / 'requirements.txt')
+    installers = []
+    for folder in sorted(local.iterdir()):
         if not folder.is_dir() or folder.name.startswith('.'):
             continue
         req = folder / 'requirements.txt'
         if req.is_file():
-            install_requirements(req)
+            req_list.append(req)
         installer = folder / 'install.py'
         if installer.is_file():
-            run([sys.executable, str(installer)], cwd=folder)
+            installers.append((folder, installer))
+
+    install_requirements_batch(req_list, env=env)
+    total = len(installers)
+    for idx, (folder, installer) in enumerate(installers, 1):
+        run_with_heartbeat(f'[NODES] 运行插件安装脚本 ({idx} 共 {total}): {folder.name}', [sys.executable, str(installer)], cwd=folder)
 
 
 def configure_nginx(password):
@@ -425,6 +732,12 @@ http {{
   access_log off;
   server_tokens off;
   client_max_body_size 500m;
+  gzip on;
+  gzip_vary on;
+  gzip_proxied any;
+  gzip_comp_level 5;
+  gzip_min_length 1024;
+  gzip_types text/plain text/css application/json application/javascript text/javascript application/xml image/svg+xml;
   map $http_upgrade $connection_upgrade {{ default upgrade; '' close; }}
   server {{
     listen 127.0.0.1:{PROXY_PORT};
@@ -449,7 +762,6 @@ http {{
     NGINX_CONF.write_text(config)
     run(['nginx', '-t', '-c', str(NGINX_CONF)])
 
-    # 若 nginx 已在运行则平滑 reload，否则全新启动
     if NGINX_PID.exists():
         try:
             pid = int(NGINX_PID.read_text().strip())
@@ -464,34 +776,13 @@ http {{
 
 
 def start_cloudflared():
-    subprocess.run(['pkill', '-f', 'cloudflared tunnel'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
-    cf_log = Path('/content/cloudflared.log')
-    if cf_log.exists():
-        cf_log.unlink()
-
-    log_f = open(cf_log, 'ab', buffering=0)
-    proc = subprocess.Popen(
-        [CLOUDFLARED_BIN, 'tunnel', '--protocol', 'http2', '--url', f'http://127.0.0.1:{PROXY_PORT}'],
-        stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True,
-    )
-
-    deadline = time.time() + 90
-    pattern = re.compile(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            out = cf_log.read_text(errors='replace')[-1500:]
-            raise RuntimeError(f'cloudflared exited early (code {proc.returncode}):\n{out}')
-        if cf_log.exists():
-            text = cf_log.read_text(errors='replace')
-            m = pattern.search(text)
-            if m:
-                url = m.group(0)
-                URL_FILE.write_text(url + '\n')
-                print(f'[READY_URL] {url}', flush=True)
-                return url
-        time.sleep(1)
-    raise RuntimeError('Timeout waiting for Cloudflare Quick Tunnel URL')
+    res = subprocess.run([sys.executable, str(START_TUNNEL_SCRIPT)], capture_output=True, text=True)
+    if res.stdout:
+        print(res.stdout, end='', flush=True)
+    if res.stderr:
+        print(res.stderr, end='', file=sys.stderr, flush=True)
+    if res.returncode != 0:
+        raise RuntimeError(f'start_tunnel.py failed (exit {res.returncode}): {(res.stderr or res.stdout)[-1200:]}')
 
 
 def start_comfy():
@@ -506,14 +797,29 @@ def start_comfy():
         stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True,
     )
     print(f'[RUN] ComfyUI started (pid={proc.pid})', flush=True)
+    start_ts = time.monotonic()
+    last_report = start_ts
     deadline = time.time() + 180
     while time.time() < deadline:
         if proc.poll() is not None:
             tail = log_path.read_text(errors='replace')[-2000:]
             raise RuntimeError(f'ComfyUI exited early (code {proc.returncode}):\n{tail}')
         if comfy_is_up():
-            print('[RUN] ComfyUI HTTP endpoint ready', flush=True)
+            elapsed = int(time.monotonic() - start_ts)
+            print(f'[RUN] ComfyUI HTTP endpoint ready，耗时 {elapsed}s', flush=True)
             return
+        now = time.monotonic()
+        if now - last_report >= 8.0:
+            elapsed = int(now - start_ts)
+            last_line = ''
+            try:
+                lines = [l.strip() for l in log_path.read_text(errors='replace').splitlines() if l.strip()]
+                if lines:
+                    last_line = f' | {lines[-1][:80]}'
+            except Exception:
+                pass
+            print(f'[RUN] 等待 ComfyUI 启动就绪，已耗时 {elapsed}s{last_line}', flush=True)
+            last_report = now
         time.sleep(2)
     raise RuntimeError('Timeout waiting for ComfyUI to listen on port ' + str(COMFY_PORT))
 
@@ -523,24 +829,25 @@ def main():
     if not pw:
         raise RuntimeError('COMFY_PASSWORD environment variable is required')
 
+    ensure_helper_scripts()
     already_running = comfy_is_up() and (LOCAL_COMFY_PATH / 'main.py').is_file()
     if already_running:
-        print('[REUSE] 检测到 ComfyUI 已在运行，跳过重复安装并刷新认证与隧道...', flush=True)
+        emit_stage(86, '复用运行中的 ComfyUI 并刷新隧道')
         configure_nginx(pw)
         start_plugin_sync_daemon()
         start_cloudflared()
         return
 
-    print('[1/5] Preparing Colab environment...', flush=True)
+    emit_stage(36, '准备 Colab 运行环境')
     prepare()
-    print('[2/5] Restoring ComfyUI source & persistent models...', flush=True)
+    emit_stage(48, '恢复 ComfyUI 本体')
     install_comfy()
-    print('[3/5] Restoring custom nodes & model downloader...', flush=True)
+    emit_stage(62, '恢复 custom_nodes 插件')
     install_nodes()
-    print('[4/5] Configuring nginx HTTP Basic Auth...', flush=True)
+    emit_stage(86, '配置加密鉴权与同步守护')
     configure_nginx(pw)
     start_plugin_sync_daemon()
-    print('[5/5] Starting ComfyUI & Cloudflare Quick Tunnel...', flush=True)
+    emit_stage(92, '启动 ComfyUI 与加密隧道')
     start_comfy()
     start_cloudflared()
 

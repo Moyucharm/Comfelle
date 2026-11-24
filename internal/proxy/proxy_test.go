@@ -134,3 +134,16 @@ func TestProxyAuthInjectionCookieStripDockAndBinaryIntegrity(t *testing.T) {
 		t.Fatalf("WS read unexpected: reply=%q err=%v", string(reply), err)
 	}
 }
+
+func TestProxySeparatesHTTP2AndWebSocketTransports(t *testing.T) {
+	h := New(staticProvider{target: Target{Ready: false}}, true)
+	if !h.httpTransport.ForceAttemptHTTP2 || h.httpTransport.TLSNextProto != nil {
+		t.Fatalf("httpTransport should enable HTTP/2 multiplexing")
+	}
+	if h.httpTransport.MaxIdleConnsPerHost < 32 {
+		t.Fatalf("httpTransport MaxIdleConnsPerHost too low: %d", h.httpTransport.MaxIdleConnsPerHost)
+	}
+	if h.wsTransport.ForceAttemptHTTP2 || h.wsTransport.TLSNextProto == nil {
+		t.Fatalf("wsTransport must stay on HTTP/1.1 for WebSocket upgrade")
+	}
+}

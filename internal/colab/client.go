@@ -253,17 +253,8 @@ func (c *Client) Unassign(ctx context.Context, endpoint string) error {
 	return err
 }
 
-// PropagateDriveCredentials 调用 Colab Drive 凭据传播接口。
-// 关键：当提供真实私有 Google Drive 笔记本 fileID 时使用 record=true，使 Google 记住该笔记本的挂载授权。
-func (c *Client) PropagateDriveCredentials(ctx context.Context, endpoint, fileID string, dryRun bool) (*DrivePropagationResult, error) {
-	record := "false"
-	effectiveFileID := strings.TrimSpace(fileID)
-	if effectiveFileID != "" {
-		record = "true"
-	} else {
-		effectiveFileID = "empty.ipynb"
-	}
-
+// PropagateDriveCredentials 调用 Colab Drive 凭据传播接口（与官方 google-colab-cli 一致，固定 record=false + empty.ipynb）。
+func (c *Client) PropagateDriveCredentials(ctx context.Context, endpoint string, dryRun bool) (*DrivePropagationResult, error) {
 	dryStr := "false"
 	if dryRun {
 		dryStr = "true"
@@ -275,7 +266,7 @@ func (c *Client) PropagateDriveCredentials(ctx context.Context, endpoint, fileID
 		"version":   {"2"},
 		"dryrun":    {dryStr},
 		"propagate": {"true"},
-		"record":    {record},
+		"record":    {"false"},
 	}
 
 	getBody, err := c.doRequest(ctx, http.MethodGet, path, params, nil, nil)
@@ -291,7 +282,7 @@ func (c *Client) PropagateDriveCredentials(ctx context.Context, endpoint, fileID
 
 	var formBuf bytes.Buffer
 	mw := multipart.NewWriter(&formBuf)
-	if err := mw.WriteField("file_id", effectiveFileID); err != nil {
+	if err := mw.WriteField("file_id", "empty.ipynb"); err != nil {
 		return nil, err
 	}
 	if err := mw.Close(); err != nil {

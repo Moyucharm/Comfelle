@@ -22,7 +22,7 @@ func TestUUIDToWebSafeBase64(t *testing.T) {
 	}
 }
 
-func TestPropagateDriveCredentialsRecordAndFileID(t *testing.T) {
+func TestPropagateDriveCredentialsUsesStandardEmptyNotebook(t *testing.T) {
 	var seenRecord string
 	var seenFileID string
 	var seenXSRF string
@@ -50,24 +50,18 @@ func TestPropagateDriveCredentialsRecordAndFileID(t *testing.T) {
 	c := NewClient(srv.Client(), "0")
 	c.SetDomain(srv.URL)
 
-	res, err := c.PropagateDriveCredentials(context.Background(), "ep-1", "1MyRealDriveNotebookID", true)
-	if err != nil {
-		t.Fatalf("PropagateDriveCredentials failed: %v", err)
-	}
-	if !res.Success {
-		t.Fatalf("expected success=true")
-	}
-	if seenRecord != "true" || seenFileID != "1MyRealDriveNotebookID" || seenXSRF != "xsrf-tok-1" {
-		t.Fatalf("unexpected params: record=%q file_id=%q xsrf=%q", seenRecord, seenFileID, seenXSRF)
-	}
-
-	// 未配置 file_id 时回退 record=false + empty.ipynb
-	_, err = c.PropagateDriveCredentials(context.Background(), "ep-1", "", true)
-	if err != nil {
-		t.Fatalf("fallback PropagateDriveCredentials failed: %v", err)
-	}
-	if seenRecord != "false" || seenFileID != "empty.ipynb" {
-		t.Fatalf("unexpected fallback: record=%q file_id=%q", seenRecord, seenFileID)
+	for _, dryRun := range []bool{true, false} {
+		seenRecord, seenFileID, seenXSRF = "", "", ""
+		res, err := c.PropagateDriveCredentials(context.Background(), "ep-1", dryRun)
+		if err != nil {
+			t.Fatalf("PropagateDriveCredentials(dryRun=%v) failed: %v", dryRun, err)
+		}
+		if !res.Success {
+			t.Fatalf("expected success=true for dryRun=%v", dryRun)
+		}
+		if seenRecord != "false" || seenFileID != "empty.ipynb" || seenXSRF != "xsrf-tok-1" {
+			t.Fatalf("unexpected params for dryRun=%v: record=%q file_id=%q xsrf=%q", dryRun, seenRecord, seenFileID, seenXSRF)
+		}
 	}
 }
 
@@ -180,5 +174,94 @@ func TestAPIErrorSummarizesHTMLBody(t *testing.T) {
 	}
 	if !strings.Contains(plainErr.Error(), `{"error":"quota exceeded"}`) {
 		t.Fatalf("expected plain JSON body to be preserved, got %q", plainErr.Error())
+	}
+}
+
+func TestBuildRcloneMountCodeEscapesConfigAndRemote(t *testing.T) {
+	code := BuildRcloneMountCode("[gdrive]\ntype = drive\ntoken = {\"access_token\":\"abc\"}\n", "gdrive:Colab/ComfyUI/")
+	for _, want := range []string{"fuse3", `"--vfs-cache-mode", "full"`, `"--vfs-read-chunk-streams", "8"`, `"--dir-cache-time", "1h"`, `"--timeout", "60s"`} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("expected %s in rclone mount script", want)
+		}
+	}
+	if !strings.Contains(code, `"gdrive:Colab/ComfyUI"`) {
+		t.Fatalf("expected trimmed remote path in rclone mount script, got:\n%s", code)
+	}
+	if strings.Contains(code, "--allow-other") {
+		t.Fatalf("must not pass --allow-other on Colab root container")
+	}
+}
+
+func TestRuntimeExecuteRetriesTransientWSDialFailure(t *testing.T) {
+	wsAttempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/kernels":
+			_, _ = w.Write([]byte(`[{"id":"kern-retry"}]`))
+		case r.URL.Path == "/api/kernels/kern-retry/channels":
+			wsAttempts++
+			if wsAttempts == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			var execReq jupyterMessage
+			if err := conn.ReadJSON(&execReq); err != nil {
+				return
+			}
+			parent := map[string]any{"msg_id": execReq.Header.MsgID}
+			_ = conn.WriteJSON(map[string]any{
+				"header":        map[string]any{"msg_id": "m1", "msg_type": "stream"},
+				"parent_header": parent,
+				"content":       map[string]any{"name": "stdout", "text": "OK_AFTER_RETRY\n"},
+			})
+			_ = conn.WriteJSON(map[string]any{
+				"header":        map[string]any{"msg_id": "m2", "msg_type": "status"},
+				"parent_header": parent,
+				"content":       map[string]any{"execution_state": "idle"},
+			})
+			_ = conn.WriteJSON(map[string]any{
+				"header":        map[string]any{"msg_id": "m3", "msg_type": "execute_reply"},
+				"parent_header": parent,
+				"content":       map[string]any{"status": "ok"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	rt := NewRuntimeClient(srv.URL, "proxy-tok", "", "sess-retry")
+	res, err := rt.Execute(context.Background(), `print("OK_AFTER_RETRY")`, ExecuteOptions{IdleTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("expected Execute to succeed after WS retry, got: %v", err)
+	}
+	if wsAttempts != 2 || !strings.Contains(res.Stdout, "OK_AFTER_RETRY") {
+		t.Fatalf("expected 2 WS attempts and OK_AFTER_RETRY, got attempts=%d stdout=%q", wsAttempts, res.Stdout)
+	}
+}
+
+func TestBuildDeployCodeExcludesGitAndThrottlesRcloneMigration(t *testing.T) {
+	code := BuildDeployCode("pw123", "", "")
+	for _, want := range []string{
+		`"--exclude=.git"`,
+		`'--exclude', '.git/**'`,
+		`'--transfers', '4'`,
+		`'--tpslimit', '8'`,
+		`'--drive-pacer-min-sleep', '100ms'`,
+		`gzip on;`,
+		`application/json`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("expected deploy.py to contain %s", want)
+		}
+	}
+	if strings.Contains(code, `'--transfers', '32'`) {
+		t.Fatalf("deploy.py must not use 32 concurrent rclone transfers against Google Drive")
 	}
 }

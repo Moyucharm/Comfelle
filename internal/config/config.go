@@ -35,7 +35,8 @@ type ColabConfig struct {
 	StateFile            string `yaml:"state_file"`
 	DefaultGPU           string `yaml:"default_gpu"`
 	HighMem              bool   `yaml:"high_mem"`
-	DriveNotebookFileID  string `yaml:"drive_notebook_file_id"`
+	RcloneConfig         string `yaml:"rclone_config"`
+	RcloneRemote         string `yaml:"rclone_remote"`
 	AuthUser             string `yaml:"auth_user"`
 	KeepaliveIntervalSec int    `yaml:"keepalive_interval_sec"`
 	HFToken              string `yaml:"hf_token"`
@@ -98,8 +99,11 @@ func applyEnvOverrides(cfg *Config) {
 	if v := strings.TrimSpace(os.Getenv("COMFY_COLAB_TOKEN_FILE")); v != "" {
 		cfg.Colab.TokenFile = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_DRIVE_NOTEBOOK_FILE_ID")); v != "" {
-		cfg.Colab.DriveNotebookFileID = v
+	if v := strings.TrimSpace(os.Getenv("COMFY_RCLONE_CONFIG")); v != "" {
+		cfg.Colab.RcloneConfig = v
+	}
+	if v := strings.TrimSpace(os.Getenv("COMFY_RCLONE_REMOTE")); v != "" {
+		cfg.Colab.RcloneRemote = v
 	}
 	if v := strings.TrimSpace(os.Getenv("HF_TOKEN")); v != "" {
 		cfg.Colab.HFToken = v
@@ -134,6 +138,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Colab.KeepaliveIntervalSec < 60 {
 		c.Colab.KeepaliveIntervalSec = 480
+	}
+	if strings.TrimSpace(c.Colab.RcloneConfig) != "" && strings.TrimSpace(c.Colab.RcloneRemote) == "" {
+		c.Colab.RcloneRemote = "gdrive:Colab/ComfyUI"
 	}
 	c.Colab.DefaultGPU = NormalizeGPU(c.Colab.DefaultGPU)
 	return nil

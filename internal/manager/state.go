@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -14,12 +15,13 @@ import (
 
 // PersistedState 存储在 state.json（权限 0600）中的非敏感元数据与自动生成的会话签名密钥。
 type PersistedState struct {
-	SessionSecret string `json:"session_secret"`
-	NotebookHash  string `json:"notebook_hash"`
-	Endpoint      string `json:"endpoint,omitempty"`
-	KernelID      string `json:"kernel_id,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
-	Accelerator   string `json:"accelerator,omitempty"`
+	SessionSecret string     `json:"session_secret"`
+	NotebookHash  string     `json:"notebook_hash"`
+	Endpoint      string     `json:"endpoint,omitempty"`
+	KernelID      string     `json:"kernel_id,omitempty"`
+	SessionID     string     `json:"session_id,omitempty"`
+	Accelerator   string     `json:"accelerator,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
 }
 
 // StateStore 负责原子读写 state.json。

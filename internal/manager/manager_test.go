@@ -68,7 +68,7 @@ func (f *fakeColabAPI) GetCCUInfo(ctx context.Context) (*colab.CCUInfo, error) {
 	return &colab.CCUInfo{CurrentBalance: 100, AssignmentsCount: n}, nil
 }
 
-func (f *fakeColabAPI) PropagateDriveCredentials(ctx context.Context, endpoint, fileID string, dryRun bool) (*colab.DrivePropagationResult, error) {
+func (f *fakeColabAPI) PropagateDriveCredentials(ctx context.Context, endpoint string, dryRun bool) (*colab.DrivePropagationResult, error) {
 	return &colab.DrivePropagationResult{Success: true}, nil
 }
 
@@ -401,5 +401,38 @@ func TestKeepaliveStopsOnPrunedAndNeverRunsWhenNotRunning(t *testing.T) {
 	mgr.runKeepaliveTick(context.Background(), &failures)
 	if snap := mgr.Status(context.Background()); snap.State != StateError || !snap.HasActiveVM {
 		t.Fatalf("runKeepaliveTick must not touch non-RUNNING state, got state=%s hasActive=%v", snap.State, snap.HasActiveVM)
+	}
+}
+
+func TestStructuredStageProgressAndRcloneStatus(t *testing.T) {
+	cfg := config.Default()
+	cfg.Colab.StateFile = filepath.Join(t.TempDir(), "state.json")
+	cfg.Colab.RcloneConfig = "./rclone.conf"
+	store, err := OpenStateStore(cfg.Colab.StateFile)
+	if err != nil {
+		t.Fatalf("OpenStateStore failed: %v", err)
+	}
+
+	api := &fakeColabAPI{}
+	mgr := New(cfg, api, store)
+	defer mgr.Shutdown()
+
+	if snap := mgr.Status(context.Background()); !snap.RcloneMode {
+		t.Fatalf("expected RcloneMode=true when rclone_config is set")
+	}
+
+	// 模拟 deploy.py 输出结构化 [STAGE <pct>] 行与普通详情行
+	mgr.setProgress(35, "准备部署", "启动云端部署脚本")
+	mgr.appendStreamOutput("[STAGE 62] 恢复 custom_nodes 插件\n[NODES] 正在通过 rclone copyto 拉取插件快照\n")
+
+	snap := mgr.Status(context.Background())
+	if snap.ProgressPct != 62 {
+		t.Fatalf("expected ProgressPct=62, got %d", snap.ProgressPct)
+	}
+	if snap.ProgressStage != "恢复 custom_nodes 插件" {
+		t.Fatalf("unexpected ProgressStage: %q", snap.ProgressStage)
+	}
+	if !strings.Contains(snap.ProgressDetail, "rclone copyto") {
+		t.Fatalf("unexpected ProgressDetail: %q", snap.ProgressDetail)
 	}
 }

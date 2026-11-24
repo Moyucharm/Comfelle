@@ -31,11 +31,12 @@ colab:
   default_gpu: "L4"
   # 是否请求高内存实例（L4 单一规格会自动忽略）
   high_mem: false
-  # 【免重复 Drive 授权关键配置】
-  # 你自己 Google Drive 里一个私有（不共享）空白 .ipynb 笔记本的真实 File ID
-  # 例如链接 https://colab.research.google.com/drive/1AbCdEfGhIjKlMnOpQrStUvWxYz 中的 1AbCd...
-  # 留空则回退为每次新建实例时通过 /panel 弹窗授权
-  drive_notebook_file_id: ""
+  # 【推荐：免弹窗零安全邮件存储方案】使用 rclone 挂载 Google Drive / R2 / S3
+  # 配置 rclone_config 后将彻底跳过 Colab 的 drive.mount 交互弹窗，仅需一次性生成 rclone.conf（权限 0600）
+  # rclone_config: "./rclone.conf"
+  # rclone_remote: "gdrive:Colab/ComfyUI"
+  rclone_config: ""
+  rclone_remote: "gdrive:Colab/ComfyUI"
   # Google 账号索引，默认 0
   auth_user: "0"
   # 保活心跳间隔（秒），默认 480（8 分钟）

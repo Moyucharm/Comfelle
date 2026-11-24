@@ -6,6 +6,7 @@
 # Local runtime secrets & state (NEVER commit!)
 config.yaml
 google_token.json
+rclone.conf
 state.json
 *.key
 *.pem

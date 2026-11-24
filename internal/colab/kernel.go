@@ -89,20 +89,41 @@ func (r *RuntimeClient) EnsureKernel(ctx context.Context) (string, error) {
 	}
 
 	payload, _ := json.Marshal(map[string]string{"name": "python3"})
-	req, err := r.newRequest(ctx, http.MethodPost, "/api/kernels", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var raw []byte
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		req, err := r.newRequest(ctx, http.MethodPost, "/api/kernels", bytes.NewReader(payload))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp, err := r.HTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("创建远端 Jupyter Kernel 失败: %w", err)
+		resp, err := r.HTTPClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("创建远端 Jupyter Kernel 失败: %w", err)
+		} else {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				raw = body
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("创建远端 Kernel 返回 HTTP %d: %s", resp.StatusCode, string(body))
+			if resp.StatusCode < 500 {
+				return "", lastErr
+			}
+		}
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			}
+		}
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("创建远端 Kernel 返回 HTTP %d: %s", resp.StatusCode, string(raw))
+	if lastErr != nil {
+		return "", lastErr
 	}
 
 	var model struct {
@@ -154,22 +175,55 @@ func (r *RuntimeClient) Execute(ctx context.Context, code string, opts ExecuteOp
 		Proxy:            http.ProxyFromEnvironment,
 		HandshakeTimeout: 30 * time.Second,
 	}
-	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
-	if err != nil {
+	var conn *websocket.Conn
+	var dialErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		var resp *http.Response
+		conn, resp, dialErr = dialer.DialContext(ctx, wsURL, headers)
+		if dialErr == nil {
+			break
+		}
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode
+			_ = resp.Body.Close()
 		}
-		return nil, fmt.Errorf("连接 Jupyter Kernel WebSocket 失败 (HTTP %d): %w", status, err)
+		dialErr = fmt.Errorf("连接 Jupyter Kernel WebSocket 失败 (HTTP %d): %w", status, dialErr)
+		if status >= 400 && status < 500 {
+			return nil, dialErr
+		}
+		if attempt < 2 {
+			wait := time.Duration(1<<attempt) * time.Second
+			if opts.OnOutput != nil {
+				opts.OnOutput(fmt.Sprintf("[WS] WebSocket 握手失败，%ds 后第 %d 次重试...\n", int(wait.Seconds()), attempt+2))
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+	}
+	if dialErr != nil {
+		return nil, dialErr
 	}
 	defer conn.Close()
 
 	doneWatch := make(chan struct{})
 	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-doneWatch:
+		// 定时发送 WebSocket Ping，防止 Colab 代理或中转链路在长耗时执行静默期间触发 5 分钟空闲断连 (close 1006)。
+		pingTicker := time.NewTicker(25 * time.Second)
+		defer pingTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+				return
+			case <-doneWatch:
+				return
+			case <-pingTicker.C:
+				_ = conn.WriteControl(websocket.PingMessage, []byte("ka"), time.Now().Add(10*time.Second))
+			}
 		}
 	}()
 	defer close(doneWatch)

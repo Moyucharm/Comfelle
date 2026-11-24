@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>控制台 · ComfyUI</title>
+  <title>控制台 - ComfyUI</title>
   <style>
     :root {
       --bg: #09090b;
@@ -137,12 +137,23 @@
       display: inline-block;
     }
     .dd-trigger {
-      min-width: 96px;
+      min-width: 148px;
       justify-content: space-between;
       padding: 0 10px 0 12px;
       background: var(--surface);
       color: var(--text);
       border: 1px solid var(--border);
+    }
+    .dd-trigger-text {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .dd-trigger-rate {
+      font-size: 11px;
+      color: var(--text-2);
+      font-weight: 400;
     }
     .dd-trigger:hover, .dropdown.open .dd-trigger {
       background: var(--surface-2);
@@ -160,7 +171,7 @@
       position: absolute;
       top: calc(100% + 6px);
       left: 0;
-      min-width: 148px;
+      min-width: 264px;
       padding: 4px;
       border-radius: 8px;
       background: #141417;
@@ -179,7 +190,7 @@
     }
     .dd-item {
       width: 100%;
-      height: 30px;
+      height: 34px;
       padding: 0 9px;
       border: none;
       border-radius: 5px;
@@ -188,6 +199,35 @@
       font-size: 12px;
       font-weight: 500;
       justify-content: space-between;
+      font-variant-numeric: tabular-nums;
+    }
+    .dd-item-left {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .dd-item-vram {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .dd-item-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dd-item-rate {
+      font-size: 11px;
+      color: var(--text-2);
+      font-weight: 400;
+    }
+    .dd-note {
+      padding: 6px 9px 4px;
+      margin-top: 3px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
     }
     .dd-item:hover {
       background: #222226;
@@ -212,6 +252,19 @@
       padding: 0 11px;
       font-size: 12px;
       gap: 7px;
+      font-variant-numeric: tabular-nums;
+    }
+    .toggle-meta {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .toggle-btn[aria-pressed="true"] .toggle-meta {
+      color: var(--text-2);
+    }
+    .toggle-btn.is-builtin {
+      opacity: 0.78;
+      cursor: default;
     }
     .toggle-btn:hover { background: var(--surface-2); color: var(--text); }
     .toggle-btn[aria-pressed="true"] {
@@ -290,6 +343,57 @@
     .notice-title { font-weight: 500; font-size: 13px; }
     .notice-sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
 
+    .progress-card {
+      display: none;
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .progress-card.show { display: block; }
+    .progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .progress-stage {
+      color: var(--text);
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .progress-meta {
+      color: var(--text-2);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .progress-track {
+      height: 5px;
+      border-radius: 999px;
+      background: #222226;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 10%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #a1a1aa, #fafafa);
+      transition: width 0.35s ease;
+    }
+    .progress-sub {
+      margin-top: 7px;
+      font-size: 11px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .terminal {
       margin-top: 20px;
       border: 1px solid var(--border);
@@ -324,6 +428,40 @@
     .log-ts { color: #52525b; margin-right: 8px; user-select: none; }
     .log-err { color: #fca5a5; }
     .log-ok { color: #86efac; }
+
+    @media (max-width: 640px) {
+      .topbar-inner { padding: 0 14px; height: 50px; }
+      .brand { gap: 7px; font-size: 13px; min-width: 0; }
+      .main { padding: 16px 14px 28px; }
+      .toolbar { gap: 14px; padding-bottom: 16px; }
+      .meta {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px 16px;
+      }
+      .actions { width: 100%; }
+      .topbar .actions { width: auto; }
+      button, .btn { height: 38px; }
+      .dropdown { flex: 1 1 150px; }
+      .dd-trigger { width: 100%; min-width: 0; }
+      .dd-menu {
+        min-width: 240px;
+        max-width: calc(100vw - 28px);
+      }
+      .toggle-btn { flex: 0 1 auto; }
+      #start-btn, #stop-btn, #force-stop-btn, #release-orphan-btn, #restart-comfy-btn, #sync-btn {
+        flex: 1 1 auto;
+      }
+      .terminal { margin-top: 16px; }
+      .terminal-body {
+        height: 52vh;
+        min-height: 260px;
+        max-height: 400px;
+        font-size: 11px;
+        padding: 10px 12px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -350,6 +488,10 @@
           <span class="kv-v" id="stat-gpu">-</span>
         </div>
         <div class="kv">
+          <span class="kv-k">运行时间</span>
+          <span class="kv-v" id="stat-uptime">-</span>
+        </div>
+        <div class="kv">
           <span class="kv-k">CCU 余额</span>
           <span class="kv-v" id="stat-ccu">-</span>
         </div>
@@ -358,28 +500,32 @@
           <span class="kv-v" id="stat-hb">-</span>
         </div>
         <div class="kv">
-          <span class="kv-k">Drive</span>
+          <span class="kv-k">存储</span>
           <span class="kv-v" id="stat-drive">-</span>
         </div>
       </div>
 
       <div class="actions" id="controls-stopped" style="display:none;">
         <div class="dropdown" id="gpu-dropdown">
-          <button class="dd-trigger" id="gpu-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-            <span id="gpu-label">L4</span>
+          <button class="dd-trigger" id="gpu-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" title="每小时参考 CCU 消耗">
+            <span class="dd-trigger-text">
+              <span id="gpu-label">L4</span>
+              <span class="dd-trigger-rate" id="gpu-rate-label">约 1.94 CCU</span>
+            </span>
             <svg class="dd-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>
           </button>
           <div class="dd-menu" id="gpu-menu" role="listbox">
-            <button class="dd-item active" type="button" data-value="L4"><span>L4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
-            <button class="dd-item" type="button" data-value="T4"><span>T4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
-            <button class="dd-item" type="button" data-value="A100"><span>A100</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
-            <button class="dd-item" type="button" data-value="H100"><span>H100</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
-            <button class="dd-item" type="button" data-value="G4"><span>G4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
-            <button class="dd-item" type="button" data-value="CPU"><span>CPU</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></button>
+            <button class="dd-item active" type="button" data-value="L4"><span class="dd-item-left"><span>L4</span><span class="dd-item-vram">24GB</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="L4">约 1.94 / 高内存</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <button class="dd-item" type="button" data-value="T4"><span class="dd-item-left"><span>T4</span><span class="dd-item-vram">15GB</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="T4">约 1.2</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <button class="dd-item" type="button" data-value="A100"><span class="dd-item-left"><span>A100</span><span class="dd-item-vram">40-80GB</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="A100">约 5.4</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <button class="dd-item" type="button" data-value="G4"><span class="dd-item-left"><span>G4</span><span class="dd-item-vram">96GB</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="G4">约 7.5</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <button class="dd-item" type="button" data-value="H100"><span class="dd-item-left"><span>H100</span><span class="dd-item-vram">80GB</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="H100">约 15.0</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <button class="dd-item" type="button" data-value="CPU"><span class="dd-item-left"><span>CPU</span><span class="dd-item-vram">无 GPU</span></span><span class="dd-item-right"><span class="dd-item-rate" data-rate-for="CPU">约 0.07</span><svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 5"/></svg></span></button>
+            <div class="dd-note">参考每小时 CCU 消耗，启动后以实时为准</div>
           </div>
         </div>
-        <button class="toggle-btn" id="high-mem-btn" type="button" aria-pressed="false">
-          <span class="toggle-dot"></span><span>High-RAM</span>
+        <button class="toggle-btn" id="high-mem-btn" type="button" aria-pressed="false" title="启用高内存配置">
+          <span class="toggle-dot"></span><span>高内存</span><span class="toggle-meta" id="high-mem-meta">默认自带</span>
         </button>
         <button class="btn-danger" id="release-orphan-btn" type="button" style="display:none;">释放残留实例</button>
         <button class="btn-primary" id="start-btn" type="button">启动实例</button>
@@ -393,7 +539,7 @@
       </div>
 
       <div class="actions" id="controls-busy" style="display:none;">
-        <button class="btn-danger" id="force-stop-btn" type="button">取消 / 强制关机</button>
+        <button class="btn-danger" id="force-stop-btn" type="button">强制关机</button>
       </div>
     </section>
 
@@ -415,6 +561,15 @@
       </div>
     </div>
 
+    <section class="progress-card" id="progress-card">
+      <div class="progress-head">
+        <span class="progress-stage" id="progress-stage">准备中</span>
+        <span class="progress-meta" id="progress-meta">10% / 00:00</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-sub" id="progress-sub">等待后台进度回报...</div>
+    </section>
+
     <section class="terminal">
       <div class="terminal-head">
         <span>日志</span>
@@ -435,14 +590,111 @@
       ERROR: "异常"
     };
 
+    // Google Colab 各规格每小时参考 CCU 消耗（实际扣费以启动后 Colab 实时返回为准）
+    const gpuRates = {
+      L4:   { std: "约 1.94", hm: "约 1.94", hmDelta: "",       hmOnly: true,  desc: "L4 默认高内存，约 53GB RAM，每小时约 1.94 CCU" },
+      T4:   { std: "约 1.2",  hm: "约 1.5",  hmDelta: "+约 0.3",  hmOnly: false, desc: "标准 13GB RAM 约 1.2 CCU，高内存 51GB RAM 约 1.5 CCU" },
+      A100: { std: "约 5.4",  hm: "约 7.0",  hmDelta: "+约 1.6",  hmOnly: false, desc: "标准约 5.4 CCU，高内存约 7.0 CCU" },
+      G4:   { std: "约 7.5",  hm: "约 9.0",  hmDelta: "+约 1.5",  hmOnly: false, desc: "RTX PRO 6000，标准约 7.5 CCU，高内存约 9.0 CCU" },
+      H100: { std: "约 15.0", hm: "约 18.0", hmDelta: "+约 3.0",  hmOnly: false, desc: "Hopper 80GB，标准约 15.0 CCU，高内存约 18.0 CCU" },
+      CPU:  { std: "约 0.07", hm: "约 0.14", hmDelta: "+约 0.07", hmOnly: false, desc: "标准约 0.07 CCU，高内存约 0.14 CCU" }
+    };
+
     const $ = (id) => document.getElementById(id);
     let initializedGPU = false;
     let selectedGPU = "L4";
     let highMemEnabled = false;
+    let lastState = "";
+    let busySinceMs = null;
+    let startedAtMs = null;
+    let progressPct = 0;
+    let progressStage = "";
+    let progressDetail = "";
+
+    const busyStates = new Set(["STARTING", "WAITING_DRIVE_AUTH", "DEPLOYING", "STOPPING"]);
+
+    function fmtElapsed(ms) {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(sec / 3600);
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+      const s = String(sec % 60).padStart(2, "0");
+      return h > 0 ? `${String(h).padStart(2, "0")}:${m}:${s}` : `${m}:${s}`;
+    }
+
+    function fmtUptimeHMS(ms) {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      const h = String(Math.floor(sec / 3600)).padStart(2, "0");
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+      const s = String(sec % 60).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
+
+    function renderUptime() {
+      const el = $("stat-uptime");
+      if (lastState === "STOPPED" || !startedAtMs) {
+        el.textContent = "-";
+        return;
+      }
+      el.textContent = fmtUptimeHMS(Date.now() - startedAtMs);
+    }
+
+    function renderProgress() {
+      const card = $("progress-card");
+      if (!busyStates.has(lastState)) {
+        card.classList.remove("show");
+        return;
+      }
+      card.classList.add("show");
+      const pct = Math.max(5, Math.min(99, progressPct || 10));
+      const elapsed = busySinceMs ? fmtElapsed(Date.now() - busySinceMs) : "00:00";
+      $("progress-stage").textContent = progressStage || (stateLabels[lastState] || lastState);
+      $("progress-meta").textContent = `${pct}% / 已耗时 ${elapsed}`;
+      $("progress-fill").style.width = `${pct}%`;
+      $("progress-sub").textContent = progressDetail || "正在执行后台任务...";
+    }
 
     const gpuDropdown = $("gpu-dropdown");
     const gpuTrigger = $("gpu-trigger");
     const highMemBtn = $("high-mem-btn");
+
+    function effectiveRate(gpu, highMem) {
+      const info = gpuRates[gpu];
+      if (!info) return "";
+      return (info.hmOnly || highMem) ? info.hm : info.std;
+    }
+
+    function updateRateIndicators() {
+      const info = gpuRates[selectedGPU] || { std: "", hm: "", hmDelta: "", hmOnly: false, desc: "" };
+      const curRate = effectiveRate(selectedGPU, highMemEnabled);
+      $("gpu-rate-label").textContent = curRate ? `${curRate} CCU` : "";
+
+      gpuDropdown.querySelectorAll("[data-rate-for]").forEach((el) => {
+        const g = el.dataset.rateFor;
+        const spec = gpuRates[g];
+        if (!spec) return;
+        if (spec.hmOnly) {
+          el.textContent = spec.std + " / 高内存";
+        } else {
+          el.textContent = effectiveRate(g, highMemEnabled);
+        }
+      });
+
+      if (info.hmOnly) {
+        highMemBtn.setAttribute("aria-pressed", "true");
+        highMemBtn.classList.add("is-builtin");
+        highMemBtn.title = info.desc;
+        $("high-mem-meta").textContent = "默认自带";
+      } else {
+        highMemBtn.setAttribute("aria-pressed", highMemEnabled ? "true" : "false");
+        highMemBtn.classList.remove("is-builtin");
+        highMemBtn.title = info.desc;
+        $("high-mem-meta").textContent = info.hmDelta || "";
+      }
+
+      if (lastState === "STOPPED") {
+        $("stat-gpu").textContent = selectedGPU;
+      }
+    }
 
     function setGPU(val) {
       selectedGPU = val;
@@ -450,11 +702,12 @@
       gpuDropdown.querySelectorAll(".dd-item").forEach((el) => {
         el.classList.toggle("active", el.dataset.value === val);
       });
+      updateRateIndicators();
     }
 
     function setHighMem(enabled) {
       highMemEnabled = !!enabled;
-      highMemBtn.setAttribute("aria-pressed", highMemEnabled ? "true" : "false");
+      updateRateIndicators();
     }
 
     gpuTrigger.onclick = (e) => {
@@ -481,7 +734,10 @@
         gpuTrigger.setAttribute("aria-expanded", "false");
       }
     });
-    highMemBtn.onclick = () => setHighMem(!highMemEnabled);
+    highMemBtn.onclick = () => {
+      if ((gpuRates[selectedGPU] || {}).hmOnly) return;
+      setHighMem(!highMemEnabled);
+    };
 
     async function apiPost(path, body = {}) {
       const res = await fetch(path, {
@@ -521,16 +777,28 @@
         $("state-pill").className = "state-pill st-" + s.state;
         $("state-text").textContent = stateLabels[s.state] || s.state;
 
+        lastState = s.state;
+        busySinceMs = s.busy_since ? Date.parse(s.busy_since) : null;
+        startedAtMs = s.started_at ? Date.parse(s.started_at) : null;
+        progressPct = s.progress_pct || 0;
+        progressStage = s.progress_stage || "";
+        progressDetail = s.progress_detail || "";
+        renderProgress();
+        renderUptime();
         if (!initializedGPU && s.default_gpu) {
           setGPU(s.default_gpu);
           setHighMem(!!s.high_mem);
           initializedGPU = true;
         }
 
-        $("stat-gpu").textContent = s.state === "STOPPED" ? s.default_gpu : s.gpu;
+        if (s.state === "STOPPED") {
+          updateRateIndicators();
+        } else {
+          $("stat-gpu").textContent = s.gpu;
+        }
         if (typeof s.ccu_balance === "number") {
           const rate = typeof s.ccu_rate_hourly === "number" && s.ccu_rate_hourly > 0
-            ? ` · ${s.ccu_rate_hourly.toFixed(2)}/h`
+            ? ` / ${s.ccu_rate_hourly.toFixed(2)} 每小时`
             : "";
           $("stat-ccu").textContent = s.ccu_balance.toFixed(2) + rate;
         } else {
@@ -541,12 +809,17 @@
         } else {
           $("stat-hb").textContent = `${s.keepalive_interval_sec}s`;
         }
-        $("stat-drive").textContent = s.drive_notebook_set ? "已绑定笔记本" : "按次授权";
+        $("stat-drive").textContent = s.rclone_mode ? "rclone 已启用" : "Colab 授权";
 
         $("top-open-btn").style.display = s.state === "RUNNING" ? "inline-flex" : "none";
         const isIdleOrErr = (s.state === "STOPPED" || s.state === "ERROR");
         $("controls-stopped").style.display = isIdleOrErr ? "flex" : "none";
-        $("release-orphan-btn").style.display = (isIdleOrErr && s.has_active_vm) ? "inline-flex" : "none";
+        const hasOrphan = isIdleOrErr && !!s.has_active_vm;
+        $("gpu-dropdown").style.display = hasOrphan ? "none" : "inline-block";
+        $("high-mem-btn").style.display = hasOrphan ? "none" : "inline-flex";
+        $("release-orphan-btn").style.display = hasOrphan ? "inline-flex" : "none";
+        $("start-btn").textContent = hasOrphan ? "接管并继续" : "启动实例";
+        $("start-btn").title = hasOrphan ? "复用云端已有托管实例继续部署或接管，不会新开机器" : "";
         $("controls-running").style.display = s.state === "RUNNING" ? "flex" : "none";
         $("controls-busy").style.display = ["STARTING", "WAITING_DRIVE_AUTH", "DEPLOYING", "STOPPING"].includes(s.state) ? "flex" : "none";
 
@@ -573,7 +846,7 @@
       const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 50;
       const el = document.createElement("span");
       el.className = "log-line";
-      const m = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/);
+      const m = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*([\s\S]*)$/);
       if (m) {
         const ts = document.createElement("span");
         ts.className = "log-ts";
@@ -583,6 +856,10 @@
         if (m[2].includes("[ERROR]") || m[2].includes("失败")) msg.className = "log-err";
         else if (m[2].includes("[READY]") || m[2].includes("成功")) msg.className = "log-ok";
         el.append(ts, msg);
+        if (busyStates.has(lastState)) {
+          progressDetail = m[2];
+          renderProgress();
+        }
       } else {
         el.textContent = line;
       }
@@ -638,6 +915,10 @@
 
     refreshStatus();
     setInterval(refreshStatus, 3000);
+    setInterval(() => {
+      renderProgress();
+      renderUptime();
+    }, 1000);
   </script>
 </body>
 </html>
