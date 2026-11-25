@@ -15,12 +15,12 @@ import (
 
 	"golang.org/x/term"
 
-	"colab-comfyui/internal/auth"
-	"colab-comfyui/internal/colab"
-	"colab-comfyui/internal/config"
-	"colab-comfyui/internal/manager"
-	"colab-comfyui/internal/proxy"
-	"colab-comfyui/internal/web"
+	"comfelle/internal/auth"
+	"comfelle/internal/colab"
+	"comfelle/internal/config"
+	"comfelle/internal/manager"
+	"comfelle/internal/proxy"
+	"comfelle/internal/web"
 )
 
 func main() {
@@ -31,9 +31,9 @@ func main() {
 				log.Fatalf("生成密码哈希失败: %v", err)
 			}
 			return
-		case "auth-google":
-			if err := cmdAuthGoogle(os.Args[2:]); err != nil {
-				log.Fatalf("Google OAuth 登录失败: %v", err)
+		case "auth", "auth-google":
+			if err := cmdAuth(os.Args[2:]); err != nil {
+				log.Fatalf("远程授权登录失败: %v", err)
 			}
 			return
 		case "serve":
@@ -54,9 +54,9 @@ func main() {
 
 func printUsage() {
 	fmt.Println(`用法:
-  colab-comfyui [serve] -config ./config.yaml    启动反向代理与 Colab 控制网关
-  colab-comfyui hash-password                    交互生成 bcrypt 密码哈希（填入 config.yaml）
-  colab-comfyui auth-google -out ./google_token.json  无头终端完成 Google OAuth2 登录并生成 Token 文件`)
+  comfelle [serve] -config ./config.yaml    启动反向代理与远端算力控制网关
+  comfelle hash-password                    交互生成 bcrypt 密码哈希（填入 config.yaml）
+  comfelle auth -out ./token.json           无头终端完成远程授权并生成凭据文件`)
 }
 
 func cmdHashPassword() error {
@@ -94,9 +94,9 @@ func cmdHashPassword() error {
 	return nil
 }
 
-func cmdAuthGoogle(args []string) error {
-	fs := flag.NewFlagSet("auth-google", flag.ExitOnError)
-	outPath := fs.String("out", "./google_token.json", "保存 Google OAuth2 Token 的文件路径")
+func cmdAuth(args []string) error {
+	fs := flag.NewFlagSet("auth", flag.ExitOnError)
+	outPath := fs.String("out", "./token.json", "保存远端凭据的文件路径")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func cmdServe(args []string) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("colab-comfyui 网关已监听 %s（控制台路径: /panel）", cfg.Server.Listen)
+		log.Printf("comfelle 网关已监听 %s（控制台路径: /panel）", cfg.Server.Listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
@@ -188,7 +188,7 @@ func cmdServe(args []string) error {
 		mgr.Shutdown()
 		return err
 	case sig := <-sigCh:
-		log.Printf("收到信号 %s，正在优雅关闭本地网关（不会主动销毁运行中的 Colab VM）...", sig)
+		log.Printf("收到信号 %s，正在优雅关闭本地网关（不会主动销毁运行中的远端实例）...", sig)
 		reconcileCancel()
 		mgr.Shutdown()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

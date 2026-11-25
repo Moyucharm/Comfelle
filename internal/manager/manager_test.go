@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"colab-comfyui/internal/colab"
-	"colab-comfyui/internal/config"
+	"comfelle/internal/colab"
+	"comfelle/internal/config"
 )
 
 type fakeColabAPI struct {

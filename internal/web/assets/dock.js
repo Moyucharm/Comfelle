@@ -227,17 +227,17 @@
     </style>
 
     <div class="fab-wrap" id="fab-wrap">
-      <button class="ball" id="ball-btn" type="button" aria-label="Colab 控制台菜单" aria-expanded="false">
+      <button class="ball" id="ball-btn" type="button" aria-label="Comfelle 控制台菜单" aria-expanded="false">
         <span class="dot" id="ball-dot"></span>
         <span class="ball-gpu" id="ball-gpu">GPU</span>
       </button>
     </div>
 
-    <div class="card" id="card" role="dialog" aria-label="Colab 实例状态">
+    <div class="card" id="card" role="dialog" aria-label="Comfelle 实例状态">
       <div class="card-head">
         <div class="card-title">
           <span class="dot" id="card-dot"></span>
-          <span id="card-gpu">Colab</span>
+          <span id="card-gpu">Comfelle</span>
           <span class="card-state" id="card-state">运行中</span>
         </div>
         <button class="icon-close" id="close-card-btn" type="button" aria-label="收起">&times;</button>

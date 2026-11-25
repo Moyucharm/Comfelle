@@ -14,19 +14,18 @@ from pathlib import Path
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="导出本机 google-colab-cli Keyring 中的 OAuth2 Token")
-    parser.add_argument("-o", "--output", default="./google_token.json", help="输出文件路径（权限自动设为 0600）")
+    parser.add_argument("-o", "--output", default="./token.json", help="输出文件路径（权限自动设为 0600）")
     args = parser.parse_args()
 
     try:
         import keyring
     except ImportError:
-        print("错误：当前 Python 环境未安装 keyring，请改用 google-colab-cli 的 Python 解释器运行，例如：", file=sys.stderr)
-        print("  ~/.local/share/uv/tools/google-colab-cli/bin/python scripts/export_local_token.py -o ./google_token.json", file=sys.stderr)
+        print("错误：当前 Python 环境未安装 keyring，请改用对应 CLI 环境的 Python 解释器运行。", file=sys.stderr)
         return 1
 
     raw = keyring.get_password("google-colab-cli", "oauth_token")
     if not raw:
-        print("未在系统 Keyring 中找到 google-colab-cli/oauth_token，请先在本机登录或直接在服务器运行 `./colab-comfyui auth-google`。", file=sys.stderr)
+        print("未在系统 Keyring 中找到凭据，请先在本机完成登录或直接在服务器运行 `./comfelle auth`。", file=sys.stderr)
         return 1
 
     data = json.loads(raw)

@@ -13,7 +13,7 @@ import (
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Auth   AuthConfig   `yaml:"auth"`
-	Colab  ColabConfig  `yaml:"colab"`
+	Colab  ColabConfig  `yaml:"runtime"`
 }
 
 type ServerConfig struct {
@@ -45,9 +45,9 @@ type ColabConfig struct {
 
 // Default 返回带安全默认值的配置。
 func Default() *Config {
-	defaultListen := "127.0.0.1:8080"
-	if v := strings.TrimSpace(os.Getenv("COMFY_DEFAULT_LISTEN")); v != "" {
-		defaultListen = v
+	defaultListen := firstEnv("COMFELLE_DEFAULT_LISTEN", "COMFY_DEFAULT_LISTEN")
+	if defaultListen == "" {
+		defaultListen = "127.0.0.1:8080"
 	}
 	return &Config{
 		Server: ServerConfig{
@@ -61,7 +61,7 @@ func Default() *Config {
 			SessionTTLHours: 168,
 		},
 		Colab: ColabConfig{
-			TokenFile:            "./google_token.json",
+			TokenFile:            "./token.json",
 			StateFile:            "./state.json",
 			DefaultGPU:           "L4",
 			AuthUser:             "0",
@@ -70,7 +70,7 @@ func Default() *Config {
 	}
 }
 
-// Load 从 YAML 文件加载配置，并允许通过环境变量覆盖关键项。
+// Load 从 YAML 文件加载配置，同时向下兼容旧版 `colab:` 键名，并允许通过环境变量覆盖关键项。
 func Load(path string) (*Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
@@ -80,6 +80,20 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件 %q 失败: %w", path, err)
 	}
+	var top map[string]yaml.Node
+	if yaml.Unmarshal(data, &top) == nil {
+		_, hasRuntime := top["runtime"]
+		_, hasLegacy := top["colab"]
+		if hasLegacy && !hasRuntime {
+			legacy := struct {
+				Colab ColabConfig `yaml:"colab"`
+			}{Colab: cfg.Colab}
+			if err := yaml.Unmarshal(data, &legacy); err != nil {
+				return nil, fmt.Errorf("解析配置文件 %q 失败: %w", path, err)
+			}
+			cfg.Colab = legacy.Colab
+		}
+	}
 	applyEnvOverrides(cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -87,32 +101,41 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+func firstEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func applyEnvOverrides(cfg *Config) {
-	if v := strings.TrimSpace(os.Getenv("COMFY_PROXY_LISTEN")); v != "" {
+	if v := firstEnv("COMFELLE_LISTEN", "COMFY_PROXY_LISTEN"); v != "" {
 		cfg.Server.Listen = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_PROXY_USERNAME")); v != "" {
+	if v := firstEnv("COMFELLE_USERNAME", "COMFY_PROXY_USERNAME"); v != "" {
 		cfg.Auth.Username = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_PROXY_PASSWORD_HASH")); v != "" {
+	if v := firstEnv("COMFELLE_PASSWORD_HASH", "COMFY_PROXY_PASSWORD_HASH"); v != "" {
 		cfg.Auth.PasswordHash = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_PROXY_SESSION_SECRET")); v != "" {
+	if v := firstEnv("COMFELLE_SESSION_SECRET", "COMFY_PROXY_SESSION_SECRET"); v != "" {
 		cfg.Auth.SessionSecret = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_COLAB_TOKEN_FILE")); v != "" {
+	if v := firstEnv("COMFELLE_TOKEN_FILE", "COMFY_COLAB_TOKEN_FILE"); v != "" {
 		cfg.Colab.TokenFile = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_RCLONE_CONFIG")); v != "" {
+	if v := firstEnv("COMFELLE_RCLONE_CONFIG", "COMFY_RCLONE_CONFIG"); v != "" {
 		cfg.Colab.RcloneConfig = v
 	}
-	if v := strings.TrimSpace(os.Getenv("COMFY_RCLONE_REMOTE")); v != "" {
+	if v := firstEnv("COMFELLE_RCLONE_REMOTE", "COMFY_RCLONE_REMOTE"); v != "" {
 		cfg.Colab.RcloneRemote = v
 	}
-	if v := strings.TrimSpace(os.Getenv("HF_TOKEN")); v != "" {
+	if v := firstEnv("HF_TOKEN"); v != "" {
 		cfg.Colab.HFToken = v
 	}
-	if v := strings.TrimSpace(os.Getenv("CIVITAI_TOKEN")); v != "" {
+	if v := firstEnv("CIVITAI_TOKEN"); v != "" {
 		cfg.Colab.CivitaiToken = v
 	}
 }
@@ -126,13 +149,20 @@ func (c *Config) Validate() error {
 		return errors.New("auth.username 不能为空")
 	}
 	if strings.TrimSpace(c.Auth.PasswordHash) == "" {
-		return errors.New("auth.password_hash 不能为空，请运行 `colab-comfyui hash-password` 生成")
+		return errors.New("auth.password_hash 不能为空，请运行 `comfelle hash-password` 生成")
 	}
 	if c.Auth.SessionTTLHours <= 0 {
 		c.Auth.SessionTTLHours = 168
 	}
 	if strings.TrimSpace(c.Colab.TokenFile) == "" {
-		return errors.New("colab.token_file 不能为空")
+		return errors.New("runtime.token_file 不能为空")
+	}
+	if c.Colab.TokenFile == "./token.json" {
+		if _, err := os.Stat("./token.json"); os.IsNotExist(err) {
+			if _, legacyErr := os.Stat("./google_token.json"); legacyErr == nil {
+				c.Colab.TokenFile = "./google_token.json"
+			}
+		}
 	}
 	if strings.TrimSpace(c.Colab.StateFile) == "" {
 		c.Colab.StateFile = "./state.json"

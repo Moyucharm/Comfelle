@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"colab-comfyui/internal/auth"
+	"comfelle/internal/auth"
 )
 
 // PersistedState 存储在 state.json（权限 0600）中的非敏感元数据与自动生成的会话签名密钥。

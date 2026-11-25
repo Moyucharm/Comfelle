@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	SessionCookieName = "colab_comfy_session"
+	SessionCookieName = "comfelle_session"
 	maxFailedAttempts = 5
 	rateLimitWindow   = 15 * time.Minute
 )

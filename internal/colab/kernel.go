@@ -233,7 +233,7 @@ func (r *RuntimeClient) Execute(ctx context.Context, code string, opts ExecuteOp
 		Header: jupyterHeader{
 			MsgID:    msgID,
 			MsgType:  "execute_request",
-			Username: "colab-comfyui",
+			Username: "comfelle",
 			Session:  r.SessionID,
 			Date:     time.Now().UTC().Format(time.RFC3339Nano),
 			Version:  "5.3",
@@ -386,7 +386,7 @@ func (r *RuntimeClient) handleColabRequest(ctx context.Context, conn *websocket.
 		Header: jupyterHeader{
 			MsgID:    uuid.NewString(),
 			MsgType:  "input_reply",
-			Username: "colab-comfyui",
+			Username: "comfelle",
 			Session:  r.SessionID,
 			Date:     time.Now().UTC().Format(time.RFC3339Nano),
 			Version:  "5.3",

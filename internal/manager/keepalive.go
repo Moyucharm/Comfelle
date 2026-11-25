@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"colab-comfyui/internal/colab"
+	"comfelle/internal/colab"
 )
 
 var errSessionPruned = errors.New("colab session pruned on server")

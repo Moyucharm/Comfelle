@@ -1,10 +1,12 @@
 # Binaries
+/comfelle
 /colab-comfyui
 /bin/
 *.exe
 
 # Local runtime secrets & state (NEVER commit!)
 config.yaml
+token.json
 google_token.json
 rclone.conf
 state.json

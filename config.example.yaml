@@ -1,4 +1,4 @@
-# colab-comfyui 服务配置示例
+# Comfelle 服务配置示例
 # 复制为 config.yaml 后填写，切勿提交到公开仓库
 
 server:
@@ -14,33 +14,33 @@ server:
 auth:
   # 外层控制面板登录账号
   username: "admin"
-  # 密码 bcrypt 哈希：运行 `./colab-comfyui hash-password` 生成
+  # 密码 bcrypt 哈希：运行 `./comfelle hash-password` 生成
   password_hash: ""
   # Session 签名密钥（留空时自动生成并持久化到 state_file）
   session_secret: ""
   # 登录有效期（小时）
   session_ttl_hours: 168
 
-colab:
-  # Google OAuth2 Token 文件路径（权限建议 0600）
-  # 可通过 scripts/export_local_token.py 从本机导出，或运行 `./colab-comfyui auth-google` 获取
-  token_file: "./google_token.json"
-  # 本地状态文件（保存固定 notebook_hash、会话元数据、自动生成的 session_secret）
+runtime:
+  # 远端运行时 OAuth2 凭据文件路径（权限建议 0600）
+  # 可运行 `./comfelle auth -out ./token.json` 获取
+  token_file: "./token.json"
+  # 本地状态文件（保存固定会话标识、实例元数据、自动生成的 session_secret）
   state_file: "./state.json"
   # 默认 GPU 规格：T4 / L4 / A100 / H100 / G4 / CPU
   default_gpu: "L4"
   # 是否请求高内存实例（L4 单一规格会自动忽略）
   high_mem: false
-  # 【推荐：免弹窗零安全邮件存储方案】使用 rclone 挂载 Google Drive / R2 / S3
-  # 配置 rclone_config 后将彻底跳过 Colab 的 drive.mount 交互弹窗，仅需一次性生成 rclone.conf（权限 0600）
+  # 【推荐：免弹窗持久化存储方案】使用 rclone 挂载云存储（S3 / R2 / 网盘）
+  # 配置 rclone_config 后全程免交互挂载，仅需一次性生成 rclone.conf（权限 0600）
   # rclone_config: "./rclone.conf"
-  # rclone_remote: "gdrive:Colab/ComfyUI"
+  # rclone_remote: "storage:Comfelle/ComfyUI"
   rclone_config: ""
-  rclone_remote: "gdrive:Colab/ComfyUI"
-  # Google 账号索引，默认 0
+  rclone_remote: "storage:Comfelle/ComfyUI"
+  # 账号索引，默认 0
   auth_user: "0"
-  # 保活心跳间隔（秒），默认 480（8 分钟）
+  # 保活巡检间隔（秒），默认 480（8 分钟）
   keepalive_interval_sec: 480
-  # 可选：模型下载器使用的 Token（仅在运行部署时注入 Colab 内存，不写入 Drive）
+  # 可选：模型下载器使用的 Token（仅在运行部署时注入远端内存，不写入云盘）
   hf_token: ""
   civitai_token: ""

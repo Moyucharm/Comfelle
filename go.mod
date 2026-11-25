@@ -1,4 +1,4 @@
-module colab-comfyui
+module comfelle
 
 go 1.26.0
 

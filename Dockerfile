@@ -18,7 +18,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/colab-comfyui ./cmd/colab-comfyui
+    go build -trimpath -ldflags="-s -w" -o /out/comfelle ./cmd/comfelle
 
 FROM alpine:3.21
 
@@ -27,15 +27,15 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /data
 
-COPY --from=builder /out/colab-comfyui /usr/local/bin/colab-comfyui
+COPY --from=builder /out/comfelle /usr/local/bin/comfelle
 
-ENV COMFY_DEFAULT_LISTEN=0.0.0.0:8080
+ENV COMFELLE_DEFAULT_LISTEN=0.0.0.0:8080
 
 VOLUME ["/data"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD sh -c 'addr="${COMFY_PROXY_LISTEN:-8080}"; wget -q -O /dev/null "http://127.0.0.1:${addr##*:}/panel/login"' || exit 1
+    CMD sh -c 'addr="${COMFELLE_LISTEN:-${COMFY_PROXY_LISTEN:-8080}}"; wget -q -O /dev/null "http://127.0.0.1:${addr##*:}/panel/login"' || exit 1
 
-ENTRYPOINT ["/usr/local/bin/colab-comfyui"]
+ENTRYPOINT ["/usr/local/bin/comfelle"]
 CMD ["serve", "-config", "/data/config.yaml"]

@@ -166,7 +166,7 @@ func RunRemoteAuthFlow(ctx context.Context, tokenPath string, out io.Writer, in 
 	}
 
 	authURL := cfg.AuthCodeURL(
-		"colab-comfyui",
+		"comfelle",
 		oauth2.AccessTypeOffline,
 		oauth2.SetAuthURLParam("prompt", "consent"),
 		oauth2.SetAuthURLParam("token_usage", "remote"),

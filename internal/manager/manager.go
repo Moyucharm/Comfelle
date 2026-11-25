@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"colab-comfyui/internal/colab"
-	"colab-comfyui/internal/config"
-	"colab-comfyui/internal/proxy"
+	"comfelle/internal/colab"
+	"comfelle/internal/config"
+	"comfelle/internal/proxy"
 )
 
 // State 描述 Colab ComfyUI 实例的生命周期状态。

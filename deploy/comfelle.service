@@ -1,0 +1,16 @@
+[Unit]
+Description=Comfelle - ComfyUI Authenticated Reverse Proxy & Ephemeral Compute Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/comfelle
+ExecStart=/opt/comfelle/comfelle serve -config /opt/comfelle/config.yaml
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

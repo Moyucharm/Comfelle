@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"colab-comfyui/internal/auth"
-	"colab-comfyui/internal/colab"
+	"comfelle/internal/auth"
+	"comfelle/internal/colab"
 )
 
 func (m *Manager) isCurrentOp(opID uint64) bool {

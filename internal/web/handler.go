@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"colab-comfyui/internal/auth"
-	"colab-comfyui/internal/manager"
+	"comfelle/internal/auth"
+	"comfelle/internal/manager"
 )
 
 //go:embed assets/login.html assets/panel.html assets/dock.js
